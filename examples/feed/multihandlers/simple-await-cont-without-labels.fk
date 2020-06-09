@@ -6,37 +6,38 @@ include std
 
 interface Whatever = whatever : Unit
 
-interface Response = response : Int -> Unit
+interface Response S = response : S -> Unit
 
-interface Request = request : Unit
+-- interface Request = request : Unit
 
-interface PromiseResponse =
+interface PromiseResponse S R  =
           -- The pollution in the return type of the callback is very annoying.
-          promiseResponse : {Int -> [PromiseResponse, AwaitResponse, Console]Int} -> Unit
+          promiseResponse : {S -> R} -> Unit
 
-interface AwaitResponse = awaitResponse : Int
+interface AwaitResponse R = awaitResponse : R
 
-client : {[PromiseResponse, AwaitResponse, Console]Unit}
+client : {[PromiseResponse Int Int, AwaitResponse Int, Console]Unit}
 client! = promiseResponse {x -> x};
            print "response is ";
            ouint awaitResponse!;
            print ", the end\n"
 
-server : {[Response, Whatever, Console] Unit}
+server : {[Response Int, Whatever, Console] Unit}
 server! = whatever!; sleep 500000; whatever!; sleep 500000; response 10
 
-schedule : {Maybe {Int -> [PromiseResponse, AwaitResponse, Console]Int} -- Response Callback
-         -> Maybe {Int -> [PromiseResponse, AwaitResponse, Console]Unit} -- The rest of Client, which gets awaited
-         -> <PromiseResponse, AwaitResponse> Unit
-         -> <Response, Whatever> Unit
+schedule : {Maybe {Int -> Int} -- Response Callback
+         -> Maybe {Int -> [PromiseResponse Int Int , AwaitResponse Int, Console] Unit} -- The rest of Client, which gets awaited
+         -> <PromiseResponse Int Int , AwaitResponse Int> Unit
+         -> <Response Int, Whatever> Unit
          -> [Console]Unit}
 
 schedule _ res <promiseResponse cb -> client> <server> =
          schedule (just cb) res (client unit) server!
 
--- When response comes in, we perform the callback as well as restarting the thread that was suspended.
+-- When response comes in, we perform the callback as well as restarting the
+-- thread that was suspended.
 schedule (just cb) (just res) unit <response x -> server> =
-         schedule nothing nothing (let result = cb x in res result) (server unit)
+         schedule nothing nothing (let result = <PromiseResponse, AwaitResponse, Console> (cb x) in  (res result)) (server unit)
 
 schedule cb res <client> <whatever -> server> =
          schedule cb res client! (print "whatever\n"; server unit)

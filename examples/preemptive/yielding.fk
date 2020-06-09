@@ -21,8 +21,7 @@ waitForStop! = promiseStop { _ ->
                             -- When we receive stop we have to stop computing.
                             -- Hence we make a new promise for Go and await
                             -- this.
-                            let res = new nothing in
-                            promiseGo {p -> write res (just unit); unit};
+                            promiseGo {_ -> unit};
                             awaitGo;
                             -- When we receive Go, we start computing again
                             -- and reinstall the stop waiter.
@@ -40,11 +39,11 @@ threadP! = waitForStop!; counter 0
 controller : {[Stop, Go, Console]Unit}
 controller! = stop!; print "\n*- stop\n"; sleep 500000; print "\n*- go\n"; go!; sleep 500000; controller!
 
-sch : {Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- stopper
+sch : {Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- rest of counter
+    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- stopper
     -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- goer
-    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- goer
-    -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit
-    -> <Stop, Go>Unit
+    -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit   -- thread
+    -> <Stop, Go>Unit                                 -- controller
     -> [Console, RefState]Unit}
 
 -- Installing Promises
@@ -53,6 +52,10 @@ sch goRes _ goer <promiseStop stpr -> thread> <control> =
 
 sch goRes stpr _ <promiseGo goer -> thread> <control> =
     sch goRes stpr (just goer) (thread unit) control!
+
+-- Taking the resumption from Await and storing it
+sch goRes stpr goer <awaitGo -> thread> <control> =
+    sch (just thread) stpr goer unit control!
 
 -- Executing promises
 -- Priority is given to go
@@ -63,15 +66,33 @@ sch goRes (just stpr) goer <thread> <stop -> control> =
     sch goRes nothing goer (stpr unit; thread!) (control unit)
 
 -- Yielding to allow messages to come into the client
+
+-- sch goRes (just stpr) goer <thread> <stop -> control> =
+--     sch goRes nothing goer (stpr unit; thread!) (control unit)
+
+-- sch goRes stpr (just goer) <thread> <go -> control> =
+--     sch goRes stpr nothing (goer unit; thread! ) (control unit)
+
+sch goRes (just stpr) goer unit <stop -> control> =
+    sch goRes nothing goer (stpr unit) (control unit)
+
+sch goRes stpr (just goer) unit <go -> control> =
+    sch goRes stpr nothing (goer unit) (control unit)
+
+
 sch goRes (just stpr) goer <yield -> thread> <stop -> control> =
     sch goRes nothing goer (stpr unit; thread unit) (control unit)
 
 sch goRes stpr (just goer) <yield -> thread> <go -> control> =
     sch goRes stpr nothing (goer unit; thread unit) (control unit)
 
--- Taking the resumption from Await and storing it
-sch goRes stpr goer <awaitGo -> thread> <control> =
-    sch (just thread) stpr goer unit control!
+-- sch goRes (just stpr) goer unit <stop -> control> =
+--     sch goRes nothing goer (stpr unit) (control unit)
+
+-- sch goRes stpr (just goer) unit <go -> control> =
+--     sch goRes stpr nothing (goer unit) (control unit)
+
+
 
 -- Finishing
 sch _ _ _ unit _ = print "\nThread finished"
