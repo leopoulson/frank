@@ -1,0 +1,48 @@
+include std
+
+-- Here we need to take multiple promises, store them, and handle
+-- We store the promises in a list.
+
+interface Whatever = whatever : Unit
+
+-- Recursive type is required.
+interface Promise S R =
+            promise : {S -> [Console, Promise Int Unit] R} -> Unit
+          | signal : S -> Unit
+          | await : R
+
+
+client : {[Promise Int Unit , Console]Unit}
+client! = promise {x -> print "running "; ouint (x + 10); print " thanks!\n";
+                   promise {x -> print "running "; ouint (x + 20); print " thanks!\n"}};
+          promise {x -> print "running "; ouint (x + 15); print " thanks!\n"}
+
+server : {[Promise Int Unit, Whatever, Console] Unit}
+server! = whatever!; sleep 500000; signal 10;
+          whatever!; sleep 500000; signal 20
+
+-- Executes a list of callbacks by just chaining them.
+signalAll : {List {Int -> [E|]Unit} -> Int -> [E|]Unit}
+signalAll [] _ = unit
+signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
+
+hdlProm : {List {Int -> [Console, Promise Int Unit]Unit} -- Response Callback
+         -> <Promise Int Unit > Unit
+         -> <Promise Int Unit, Whatever> Unit
+         -> [Console]Unit}
+
+-- Installing promise
+hdlProm cbs <promise cb -> client> <server> =
+         hdlProm (cb :: cbs) (client unit) server!
+
+
+-- hdlProm cbs <client> <signal x -> server> =
+--         hdlProm [] (<Promise> (signalAll cbs x); client!) (server unit)
+
+-- hdlProm cb <client> <whatever -> server> =
+--          hdlProm cb client! (print "whatever\n"; server unit)
+
+-- hdlProm _ _ unit = print "\nserver exits\n"
+
+main : {[Console]Unit}
+main! = hdlProm nil client! server!

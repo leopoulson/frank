@@ -1,0 +1,49 @@
+include std
+
+-- Let's have two threads. The client requests the server for data, and installs
+-- a promise that it acts on when the server returns. The server can do some
+-- other things, but will eventually send the request.
+
+interface Whatever = whatever : Unit
+
+interface Promise S R =
+            promise : {S -> R} -> Unit
+          | signal : S -> Unit
+          | await : R
+
+
+client : {[Promise Int Int [Console], Console]Unit}
+client! = promise {x -> print "running"; x};
+           print "response is ";
+           ouint await!;
+           print ", the end\n"
+
+server : {[Promise Int Int, Whatever, Console] Unit}
+server! = whatever!; sleep 500000; signal 10
+
+schedule : {Maybe {Int -> [Console]Int} -- Response Callback
+         -> Maybe {Int -> [Promise Int Int [Console] , Console] Unit} -- The rest of Client, which gets awaited
+         -> <Promise Int Int [Console]> Unit
+         -> <Promise Int Int, Whatever> Unit
+         -> [Console]Unit}
+
+schedule _ res <promise cb -> client> <server> =
+         schedule (just cb) res (client unit) server!
+
+-- When response comes in, we perform the callback as well as restarting the
+-- thread that was suspended.
+schedule (just cb) (just res) unit <signal x -> server> =
+         schedule nothing nothing (let result = <Promise> (cb x) in  (res result)) (server unit)
+
+schedule cb res <client> <whatever -> server> =
+         schedule cb res client! (print "whatever\n"; server unit)
+
+-- When we await, we take the continuation of the effect and store it.
+-- We then wait for the corresponding signal to come in.
+schedule cb _ <await -> client> <server> =
+         schedule cb (just client) unit server!
+
+schedule _ _ _ unit = print "\nserver exits\n"
+
+main : {[Console]Unit}
+main! = schedule nothing nothing client! server!
