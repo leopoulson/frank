@@ -1,17 +1,40 @@
 include std
 
-interface Result = result : Int -> Unit
+interface Result = result : String -> Unit
 
-interface Call = call : Int -> String -> Unit
+interface Call = call : String -> Unit
 
-interface PromiseCall = promiseCall {Int -> String -> [Web]String} -> Unit
+interface PromiseCall = promiseCall : {String -> [Console, Web, PromiseCall, Result]Unit} -> Unit
 
 -- This is the remote web request
 remoteRequest : {String -> [Web]String}
 remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
 
-callBody : {Int -> String -> [Web]String}
-callBody id st = remoteRequest st
+remote : {[Console, Web, PromiseCall, Result]Unit}
+remote! = promiseCall {arg -> let res = remoteRequest arg in
+                              result res; remote!}
 
-remote : {[Web, Console, PromiseCall]}
-remote = promiseCall
+caller : {[Call]Unit}
+caller! = call "10"
+
+sch : {Maybe {String -> [Console, Web, PromiseCall, Result]Unit} -- callback for call
+    -> <PromiseCall, Result> Unit            -- remote
+    -> <Call> Unit                   -- caller
+    -> [Console, Web]Unit}
+
+
+sch cb <result st -> remote> <caller> =
+    print st;
+    sch cb (remote unit) caller!
+
+sch _ <promiseCall cb -> remote> <caller> =
+    sch (just cb) (remote unit) caller!
+
+sch (just cb) <remote> <call st -> caller> =
+    sch nothing ( (cb st); remote!) (caller unit)
+
+sch _ unit _ = print "remote exits\n"
+sch _ _ unit = print "caller exits\n"
+
+main : [Console, Web]Unit
+main! = sch nothing remote! caller!

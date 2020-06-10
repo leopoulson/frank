@@ -6,15 +6,15 @@ interface Stop = stop : Unit
 
 interface Go = go : Unit
 
-interface PromiseStop = promiseStop : {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit} -> Unit
+interface PromiseStop = promiseStop : {Unit -> [PromiseGo, AwaitGo, PromiseStop]Unit} -> Unit
 
-interface PromiseGo = promiseGo : {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit} -> Unit
+interface PromiseGo = promiseGo : {Unit -> [PromiseGo, AwaitGo, PromiseStop]Unit} -> Unit
 
 interface AwaitGo = awaitGo : Unit
 
 interface Yield = yield : Unit
 
-waitForStop : {[PromiseStop, Console, PromiseGo, RefState, AwaitGo, Yield]Unit}
+waitForStop : {[PromiseStop, PromiseGo, AwaitGo]Unit}
 -- First we wait for the stop signal to come in.
 -- This wait is done non-blocking.
 waitForStop! = promiseStop { _ ->
@@ -33,18 +33,18 @@ counter x = ouint x; print " ";
             yield!;
             counter (x + 1)
 
-threadP : {[PromiseStop, Console, PromiseGo, RefState, AwaitGo, Yield]Unit}
-threadP! = waitForStop!; counter 0
+threadP : {[PromiseStop, Console, PromiseGo, AwaitGo, Yield]Unit}
+threadP! = <Console, Yield> waitForStop!; counter 0
 
 controller : {[Stop, Go, Console]Unit}
 controller! = stop!; print "\n*- stop\n"; sleep 500000; print "\n*- go\n"; go!; sleep 500000; controller!
 
-sch : {Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- rest of counter
-    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- stopper
-    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- goer
+sch : {Maybe {Unit -> [PromiseStop, PromiseGo, AwaitGo, Yield, Console]Unit}    -- rest of counter
+    -> Maybe {Unit -> [PromiseGo, AwaitGo, PromiseStop]Unit}    -- stopper
+    -> Maybe {Unit -> [PromiseGo, AwaitGo, PromiseStop]Unit}    -- goer
     -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit   -- thread
     -> <Stop, Go>Unit                                 -- controller
-    -> [Console, RefState]Unit}
+    -> [Console]Unit}
 
 -- Installing Promises
 sch goRes _ goer <promiseStop stpr -> thread> <control> =
@@ -54,44 +54,24 @@ sch goRes stpr _ <promiseGo goer -> thread> <control> =
     sch goRes stpr (just goer) (thread unit) control!
 
 -- Taking the resumption from Await and storing it
-sch goRes stpr goer <awaitGo -> thread> <control> =
-    sch (just thread) stpr goer unit control!
+sch _ stpr goer <awaitGo -> thread> <control> =
+    sch (just (<Console> thread)) stpr goer unit control!
 
 -- Executing promises
 -- Priority is given to go
 sch (just goRes) stpr (just goer) unit <go -> control> =
-    sch nothing stpr nothing (let result = goer unit in goRes result) (control unit)
+    sch nothing stpr nothing (let result = <Yield, Console> (goer unit) in goRes result) (control unit)
 
 sch goRes (just stpr) goer <thread> <stop -> control> =
-    sch goRes nothing goer (stpr unit; thread!) (control unit)
+    sch goRes nothing goer (<Yield, Console>(stpr unit); thread!) (control unit)
 
 -- Yielding to allow messages to come into the client
 
--- sch goRes (just stpr) goer <thread> <stop -> control> =
---     sch goRes nothing goer (stpr unit; thread!) (control unit)
-
--- sch goRes stpr (just goer) <thread> <go -> control> =
---     sch goRes stpr nothing (goer unit; thread! ) (control unit)
-
-sch goRes (just stpr) goer unit <stop -> control> =
-    sch goRes nothing goer (stpr unit) (control unit)
-
-sch goRes stpr (just goer) unit <go -> control> =
-    sch goRes stpr nothing (goer unit) (control unit)
-
-
 sch goRes (just stpr) goer <yield -> thread> <stop -> control> =
-    sch goRes nothing goer (stpr unit; thread unit) (control unit)
+    sch goRes nothing goer (<Yield, Console>(stpr unit); thread unit) (control unit)
 
 sch goRes stpr (just goer) <yield -> thread> <go -> control> =
-    sch goRes stpr nothing (goer unit; thread unit) (control unit)
-
--- sch goRes (just stpr) goer unit <stop -> control> =
---     sch goRes nothing goer (stpr unit) (control unit)
-
--- sch goRes stpr (just goer) unit <go -> control> =
---     sch goRes stpr nothing (goer unit) (control unit)
-
+    sch goRes stpr nothing (<Yield, Console>(goer unit); thread unit) (control unit)
 
 
 -- Finishing
@@ -99,5 +79,5 @@ sch _ _ _ unit _ = print "\nThread finished"
 sch _ _ _ _ unit = print "\nController finished"
 
 
-main : {[Console, RefState]Unit}
+main : {[Console]Unit}
 main! = sch nothing nothing nothing threadP! controller!

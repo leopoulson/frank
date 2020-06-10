@@ -1,0 +1,112 @@
+include std
+
+-- Here we need to take multiple promises, store them, and handle
+-- We store the promises in a list.
+
+interface Whatever = whatever : Unit
+
+-- Recursive type is required.
+interface Promise S R =
+            promise : {S -> [RefState, Console] R} -> (Pid R)
+          | signal : S -> Unit
+          | await : Pid R -> R
+
+data Pid X = pid (Ref (Maybe X))
+
+readPid : {Pid X -> [RefState] (Maybe X)}
+readPid (pid cell) = read cell
+
+snoc : {List X -> X -> List X}
+snoc nil x = [x]
+snoc (y :: ys) x = y :: (snoc ys x)
+
+
+client : {[Promise Int Unit, Console, RefState]Unit}
+client! = let p2 = promise {x -> print "running "; ouint (x + 15); print " thanks!\n"} in
+          let p3 = promise {x -> print "running "; ouint (x + 20); print " thanks!\n"} in
+          print "starting\n";
+          await p2;
+          print "first wait\n";
+          await p3;
+          let p4 = promise {x -> print "running "; ouint (x + 25); print " thanks!\n"} in
+          print "all done\n";
+          unit
+
+server : {Int -> [Promise Int Unit, Whatever, Console, RefState] Unit}
+server x = whatever!; sleep 500000; signal x; server x
+
+-- Executes a list of callbacks by just chaining them.
+signalAll : {List {Int -> [E|]Unit} -> Int -> [E|]Unit}
+signalAll [] _ = unit
+signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
+
+-- Fulfills a single promise.
+-- Returns a computation that can have effects.
+fulfill : {Pair (Pid Unit) {Int -> [Console, RefState]Unit} -> Int -> [Console, RefState]Unit}
+fulfill (pair (pid cell) cb) arg = write cell (just (cb arg))
+
+
+fulfillAll : {List (Pair (Pid Unit) {Int -> [Console, RefState] Unit}) ->
+              Int -> [Console, RefState] Unit}
+fulfillAll [] _ = unit
+fulfillAll ((pair (pid cell) cb) :: rest) arg = write cell (just (cb arg)) ; (fulfillAll rest arg)
+
+
+
+hdlProm : {List (Pair (Pid Unit) {Int -> [RefState, Console]Unit}) -- Response Callback & End cell
+        -> Maybe (Pair (Pid Unit) {Unit -> [RefState, Console, Promise Int Unit]Unit}) -- Possibly awaited computation.
+        -> <Promise Int Unit> Unit
+        -> <Promise Int Unit, Whatever> Unit
+        -> [Console, RefState]Unit}
+
+-- Installing promise
+hdlProm cbs res <promise cb -> client> <server> =
+         let newPid = pid (new nothing) in
+         hdlProm (snoc cbs (pair newPid cb)) res (client newPid) server!
+
+-- Running all promises
+-- hdlProm cbs <client> <signal x -> server> =
+--         hdlProm [] ( (fulfillAll cbs x); client!) (server unit)
+
+-- Just running the top promise
+-- This is when computation is NOT blocked
+hdlProm (cb :: cbs) nothing <client> <signal x -> server> =
+        hdlProm cbs nothing (<Promise> (fulfill cb x); client!) (server unit)
+
+-- Running promises when computations are blocked.
+hdlProm (cb :: cbs) (just (pair cell res)) unit <signal x -> server> =
+        -- First fulfill the promise at the top of the list.
+        -- This is bad becuase the effects creep in here.
+        let cbResult =  (fulfill cb x) in
+        -- Now check to see if this fulfilled the awaited promise. If it did, just resume the computation.
+          case (readPid cell)
+          { (just x) -> hdlProm cbs nothing (cbResult; res x) (server unit)
+               -- if it didn't, put the result of the fulfilled promise at the
+               -- front of the queue of things to do upon resumption
+          | nothing -> hdlProm cbs (just (pair cell {x -> cbResult; res x})) unit (server unit) }
+
+-- Signals with nothing to hear them just disappear.
+hdlProm [] res <client> <signal x -> server> =
+        hdlProm [] res client! (server unit)
+
+-- Installing awaits
+hdlProm cbs _ <await cell -> client> <server> =
+        case (readPid cell)
+        -- Here we make a choice. The cell might have already had a value
+        -- written to it, meaning the promise has been executed. In which case,
+        -- we just immediately restart with that value.
+        { (just x) ->
+                      hdlProm cbs nothing (client x) server!
+        -- If the cell still has nothing in it, we have to start to block.
+        | nothing  ->
+                      hdlProm cbs (just (pair cell client)) unit server! }
+
+-- Whatevering
+hdlProm cb res <client> <whatever -> server> =
+         hdlProm cb res client! (print "whatever\n"; server unit)
+
+hdlProm _ _ unit _ = print "\nclient exits\n"
+hdlProm _ _ _ unit = print "\nserver exits\n"
+
+main : {[Console, RefState]Unit}
+main! = hdlProm nil nothing client! (server 0)

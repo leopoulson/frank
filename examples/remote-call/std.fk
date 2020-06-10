@@ -9,6 +9,15 @@ if false t f = f!
 eqn : {Int -> Int -> Bool}
 eqn x y = x == y
 
+data Maybe X = nothing | just X
+
+mapF : {{X -> Y} -> List X -> List Y}
+mapF f []        = []
+mapF f (x :: xs) = f x :: mapF f xs
+
+print : {String -> [Console]Unit}
+print s = mapF ouch s; unit
+
 ------ map stuff
 data Map K V = mentry K V (Map K V) | mnil
 

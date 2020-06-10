@@ -11,7 +11,6 @@ interface Response S = response : S -> Unit
 -- interface Request = request : Unit
 
 interface PromiseResponse S R  =
-          -- The pollution in the return type of the callback is very annoying.
           promiseResponse : {S -> R} -> Unit
 
 interface AwaitResponse R = awaitResponse : R
