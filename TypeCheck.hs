@@ -361,7 +361,8 @@ checkPat (CmdPat cmd n xs g a) port@(Port adjs ty b) =                          
      let (insts, _) = adjsNormalForm adjs
      let insts' = bwd2fwd $ M.findWithDefault BEmp itf insts
      if length insts' > n then
-       do let ps = insts' !! n
+       -- Remember that the interfaces are listed back - to - front; hence we index in reverse.
+       do let ps = insts' !! (length insts' - n - 1)
           addMark
           -- Flexible ty vars (corresponding to qs)
           skip <- getCmdTyVars cmd
