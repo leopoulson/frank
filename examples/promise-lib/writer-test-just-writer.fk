@@ -1,0 +1,31 @@
+--- begin standard stuff
+map : {{X -> Y} -> List X -> List Y}
+map f []        = []
+map f (x :: xs) = f x :: map f xs
+
+print : {String -> [Console]Unit}
+print s = map ouch s; unit
+--- end standard stuff
+
+interface Writer X = rite : X -> Unit
+
+interface Reader X = ask : X
+
+writer : {[Writer Int, Writer String] Unit}
+writer! = rite "The"; <Writer> (rite 4)
+
+hdlWriter : {<Writer Int, Writer String> Unit
+            -> [Console] Unit}
+hdlWriter <rite.0 s -> k> = print s; hdlWriter (k unit)
+hdlWriter <rite.1 n -> k> = hdlWriter (k unit)
+hdlWriter unit = unit
+
+-- hdlWriterBad : {<Writer Int, Writer String> Unit
+--             -> [Console] Unit}
+-- hdlWriterBad <rite.0 s -> k> = ouint (s + 10); print "p"; hdlWriterBad (k unit)
+-- hdlWriterBad <rite.1 n -> k> = print "writer int\n"; hdlWriterBad (k unit)
+-- hdlWriterBad unit = unit
+
+
+main : {[Console] Unit}
+main! = hdlWriter writer!

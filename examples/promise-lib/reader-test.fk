@@ -1,0 +1,21 @@
+--- begin standard stuff
+map : {{X -> Y} -> List X -> List Y}
+map f []        = []
+map f (x :: xs) = f x :: map f xs
+
+print : {String -> [Console]Unit}
+print s = map ouch s; unit
+--- end standard stuff
+
+interface Reader X = ask : X
+
+reader : {[Console, Reader Int, Reader String] Unit}
+reader! = print ask!; print "\n"; ouint (<Reader> ask!)
+
+hdlReader : {<Reader Int, Reader String> Unit -> [Console]Unit}
+hdlReader <ask.0 -> k> = hdlReader (k "the")
+hdlReader <ask.1 -> k> = hdlReader (k 42)
+hdlReader x = x
+
+main : {[Console] Unit}
+main! = hdlReader reader!

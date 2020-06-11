@@ -1,0 +1,51 @@
+main():
+main() ->
+    hdlWriter(writer())
+
+hdlWriter((([rite] , ([],0) ) , rite, rite)):
+hdlWriter({'rite.0(s) -> k}) ->
+         'ouint(s);hdlWriter(k(unit())),
+hdlWriter({'rite.1(n) -> k}) ->
+         print(n);hdlWriter(k(unit())),
+hdlWriter(['unit]) ->
+         unit()
+
+writer():
+writer() ->
+      'rite(cons([|T|],cons([|h|],cons([|e|],nil()))));<( rite) ([1],2)> ('rite(4))
+
+print((,)):
+print(s) ->
+     map('ouch,s);unit()
+
+map((,), (,)):
+map(f, ['nil]) ->
+   nil(),
+map(f, ['cons,x,xs]) ->
+   cons(f(x),map(f,xs))
+
+isAlphaNum((,)):
+
+case((,), (,)):
+case(x, f) ->
+    f(x)
+
+false():
+false() ->
+     ['false]
+
+true():
+true() ->
+    ['true]
+
+unit():
+unit() ->
+    ['unit]
+
+nil():
+nil() ->
+   ['nil]
+
+cons():
+cons(x1, x2) ->
+    ['cons,x1,x2]

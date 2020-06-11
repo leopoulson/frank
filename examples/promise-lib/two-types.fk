@@ -6,16 +6,15 @@ include std
 interface Whatever = whatever : Unit
 
 -- Empty datatype used as a type-level string
-data OpInt  = opInt
+data OpInt = opInt
 
 data OpStr = opStr
 
 -- Recursive type is required.
 interface Promise N S R =
             promise : N -> {S -> [Console] R} -> Unit
-            -- promise : N -> {S -> [Console, Promise N Int Unit] R} -> Unit
           | signal : N -> S -> Unit
-          | await : R
+          -- | await : R
 
 snoc : {List X -> X -> List X}
 snoc nil x = [x]
@@ -26,18 +25,23 @@ client : {[
            Promise OpStr String Unit,
            Promise OpInt Int Unit,
            Console]Unit}
-client! = (
-          -- (promise opInt {x -> print "running "; ouint (x + 10); print " thanks!\n"})
-          -- ;
-          <Promise> (promise opStr {st -> print "runnign str"; print st; print " thanks again!\n"}))
-          -- ; <Promise> (promise opStr {st -> print "runnign str"; print st; print " thanks again!\n"})
-          -- ; promise opInt {x -> print "running "; ouint (x + 15); print " thanks!\n"})
+client! =
+          (promise opInt {x -> print "running "; ouint (x + 10); print " thanks!\n"})
+          ;
+          <Promise> (promise opStr {st -> print "runnign str"; print st; print " thanks again!\n"})
 
 -- server : {Int -> [Promise OpInt Int Unit, Whatever, Console] Unit}
 -- server x = whatever!; sleep 500000; signal opInt x; server (x + 10)
 
-server : {Int -> [Promise OpStr String Unit, Whatever, Console] Unit}
-server x = signal opStr "yes"
+server : {Int ->
+            [
+             Promise OpStr String Unit,
+             Promise OpInt Int Unit,
+             Console] Unit}
+server x =
+            (signal opInt 24)
+            ;
+            <Promise> (signal opStr "yes")
 
 -- Executes a list of callbacks by just chaining them.
 signalAll : {List {Int -> [E|]Unit} -> Int -> [E|]Unit}
@@ -50,23 +54,42 @@ hdlProm : {List {Int -> [Console]Unit} -- Response Callbacks
 
          -- -> <Promise OpInt Int Unit> Unit
          -- -> <Promise OpInt Int Unit, Whatever> Unit
-         -> <Promise OpStr String Unit, Whatever> Unit
+         -> <Promise OpStr String Unit, Promise OpInt Int Unit> Unit
          -> [Console]Unit}
 
 -- Installing promise
-hdlProm cbs <promise opStr cb -> client> <server> =
-        print "installing";
+-- And this catches int?
+hdlProm cbs <promise.0 _ cb -> client> <server> =
+        print "installing int\n";
          hdlProm cbs (client unit) server!
 
--- hdlProm cbs <promise opInt cb -> client> <server> =
---          unit --hdlProm (snoc cbs cb) (client unit) server!
+-- So for whatever reason this catches the int
+hdlProm cbs <promise.1 _ cb -> client> <server> =
+        print "installing str\n";
+        hdlProm cbs (client unit) server!
+
+hdlProm cbs <client> <signal.0 opStr n -> server> =
+        print "\nint signal\n";
+        -- print st;
+        hdlProm cbs (client!) (server unit)
+
+hdlProm cbs <client> <signal.1 _ n -> server> =
+        print "\nstr signal\n";
+        hdlProm cbs client! (server unit)
 
 
--- hdlProm cbs <promise opStr cb -> client> <server> =
---         hdlProm cbs (client unit) server!
+-- hdlProm cbs <client> <signal.0 _ n -> server> =
+--         print "\nint signal\n";
+--         n + 10;
+--         hdlProm cbs (client!) (server unit)
 
-hdlProm cbs <client> <signal opStr st -> server> =
-        hdlProm cbs (print st; client!) (server unit)
+
+
+
+
+-- hdlProm cbs <client> <signal.1 _ n -> server> =
+--         ouint n;
+--         hdlProm cbs (client!) (server unit)
 
 -- hdlProm cbs <client> <signal opInt x -> server> =
 --         hdlProm [] ( (signalAll cbs x); client!) (server unit)
@@ -79,6 +102,10 @@ hdlProm _ _ unit = print "\nserver exits\n"
 
 -- hdlTop : {<Promise OpStr String Unit>Unit -> Unit}
 -- hdlTop <promise opStr cb -> client> = hdlTop (client unit)
+
+-- handleWhatever : {<Console | Whatever> Unit -> [Console]Unit}
+-- handleWhatever <whatever -> k> = print "whatever\n"; handleWhatever (k unit)
+-- handleWhatever unit = unit
 
 main : {[Console]Unit}
 main! = (hdlProm nil client! (server 0))

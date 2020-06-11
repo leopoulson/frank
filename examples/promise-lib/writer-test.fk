@@ -1,0 +1,42 @@
+--- begin standard stuff
+map : {{X -> Y} -> List X -> List Y}
+map f []        = []
+map f (x :: xs) = f x :: map f xs
+
+print : {String -> [Console]Unit}
+print s = map ouch s; unit
+--- end standard stuff
+
+interface Writer X = rite : X -> Unit
+
+interface Reader X = ask : X
+
+writer : {[Writer Int, Writer String] Unit}
+writer! = rite "The"; <Writer> (rite 42)
+
+hdlWriter : {<Writer Int, Writer String> Unit
+            -> [Console] Unit}
+hdlWriter <rite.0 s -> k> = print s; hdlWriter (k unit)
+hdlWriter <rite.1 n -> k> = print "writer int\n"; hdlWriter (k unit)
+hdlWriter unit = unit
+
+-- hdlWriterBad : {<Writer Int, Writer String> Unit
+--             -> [Console] Unit}
+-- hdlWriterBad <rite.0 s -> k> = print "writer string\n"; print s; hdlWriterBad (k unit)
+-- hdlWriterBad <rite.1 n -> k> = print "writer int\n"; ouint n; hdlWriterBad (k unit)
+-- hdlWriterBad unit = unit
+
+-- reader : {[Console, Reader Int, Reader String] Unit}
+-- reader! = print ask!; print "\n"; ouint (<Reader> ask!)
+
+-- hdlReader : {<Reader Int, Reader String> Unit -> [Console]Unit}
+-- hdlReader <ask.0 -> k> = hdlReader (k "the")
+-- hdlReader <ask.1 -> k> = hdlReader (k 42)
+-- hdlReader x = x
+
+
+
+
+main : {[Console] Unit}
+main! = hdlWriter writer!
+-- main! = hdlReader reader!
