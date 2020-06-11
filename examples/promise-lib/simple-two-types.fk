@@ -1,0 +1,66 @@
+include std
+
+-- Here we need to take multiple promises, store them, and handle
+-- We store the promises in a list.
+
+data OpInt = opInt
+
+data OpStr = opStr
+
+-- Recursive type is required.
+interface Promise N S R =
+            promise : N -> {S -> [Console] R} -> Unit
+          | signal : N -> S -> Unit
+          -- | await : R
+
+snoc : {List X -> X -> List X}
+snoc nil x = [x]
+snoc (y :: ys) x = y :: (snoc ys x)
+
+client : {[Promise OpStr String Unit,
+           Promise OpInt Int Unit,
+           Console]Unit}
+client! = (promise opInt {x -> print "running "; ouint (x + 10); print " thanks!\n"});
+          <Promise> (promise opStr {st -> print "running str; "; print st; print " thanks again!\n"});
+          (promise opInt {x -> print "running "; ouint (x + 20); print " thanks!\n"});
+          <Promise> (promise opStr {st -> print "running str; "; print st; print " thanks one more time!\n"})
+
+server : {Int ->
+            [Promise OpStr String Unit,
+             Promise OpInt Int Unit,
+             Console] Unit}
+server x = signal opInt 24; sleep 500000; <Promise> (signal opStr "yes")
+
+-- Executes a list of callbacks by just chaining them.
+-- Sadly can't be polymorphic in R
+signalAll : {List {S -> [E|]Unit} -> S -> [E|]Unit}
+signalAll [] _ = unit
+signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
+
+hdlProm : {List {Int -> [Console]Unit}        -- Int Response Callbacks
+       ->  List {String -> [Console]Unit}     -- String Response Callbacks
+       ->  <Promise OpStr String Unit, Promise OpInt Int Unit> Unit
+       ->  <Promise OpStr String Unit, Promise OpInt Int Unit> Unit
+       ->  [Console]Unit}
+
+-- Installing promise
+-- In the future, it would be superb if we could do without the .0 parts and
+-- just go automatically to check that it's opInt
+hdlProm icbs scbs <promise.0 opInt cb -> client> <server> =
+        hdlProm (snoc icbs cb) scbs (client unit) server!
+
+hdlProm icbs scbs <promise.1 opStr cb -> client> <server> =
+        hdlProm icbs (snoc scbs cb) (client unit) server!
+
+-- Performing once signals have arrived.
+hdlProm icbs scbs <client> <signal.0 opInt n -> server> =
+        hdlProm nil scbs (<Promise, Promise> (signalAll icbs n); client!) (server unit)
+
+hdlProm icbs scbs <client> <signal.1 opStr n -> server> =
+        hdlProm icbs nil (<Promise, Promise> (signalAll scbs n); client!) (server unit)
+
+hdlProm _ _ unit _ = print "\nclient exits\n"
+hdlProm _ _ _ unit = print "\nserver exits\n"
+
+main : {[Console]Unit}
+main! = (hdlProm nil nil client! (server 0))

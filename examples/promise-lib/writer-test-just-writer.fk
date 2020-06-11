@@ -17,7 +17,7 @@ writer! = rite "The"; <Writer> (rite 4)
 hdlWriter : {<Writer Int, Writer String> Unit
             -> [Console] Unit}
 hdlWriter <rite.0 s -> k> = print s; hdlWriter (k unit)
-hdlWriter <rite.1 n -> k> = hdlWriter (k unit)
+hdlWriter <rite.1 n -> k> = ouint n; hdlWriter (k unit)
 hdlWriter unit = unit
 
 -- hdlWriterBad : {<Writer Int, Writer String> Unit
