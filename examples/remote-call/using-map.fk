@@ -25,6 +25,7 @@ while cond body = if cond! { body!; while cond body }
                             { unit }
 ----- end standard stuff
 
+
 ------ map stuff
 data Map K V = mentry K V (Map K V) | mnil
 
@@ -46,7 +47,6 @@ delete eq k (mentry k' v rest) = if (eq k k') {delete eq k rest} {mentry k' v (d
 insert : K -> V -> Map K V -> Map K V
 insert key value m = mentry key value m
 ------ end map stuff
-
 
 
 eqn : {Int -> Int -> Bool}

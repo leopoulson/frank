@@ -41,7 +41,7 @@ schedule (just cb) (just res) unit <response x -> server> =
 schedule cb res <client> <whatever -> server> =
          schedule cb res client! (print "whatever\n"; server unit)
 
--- When we await, we take the continuation of the effect and store it.
+-- When we await, we take the continuation of the effect and store it.DONE Handle two types of promise at once
 -- We then wait for the corresponding signal to come in.
 schedule cb _ <awaitResponse -> client> <server> =
          schedule cb (just client) unit server!

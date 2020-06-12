@@ -1,0 +1,76 @@
+include std
+
+-- Here we need to take multiple promises, store them, and handle
+-- We store the promises in a list.
+
+data OpInt = opInt
+
+data OpStr = opStr
+
+-- Recursive type is required.
+interface Promise N S R =
+            promise : N -> {S -> [Console] R} -> Unit
+          | signal : N -> S -> Unit
+          -- | await : R
+
+snoc : {List X -> X -> List X}
+snoc nil x = [x]
+snoc (y :: ys) x = y :: (snoc ys x)
+
+client : {[--Promise OpStr String Unit,
+           Promise OpInt Int Unit]Unit}
+client! =
+          --(promise opInt {x -> print "running "; ouint (x + 10); print " thanks!\n"});
+          -- <Promise> (promise opStr {st -> print "running str; "; print st; print " thanks again!\n"});
+          (promise opInt {x -> print "running "; ouint (x + 20); print " thanks!\n"})
+          -- <Promise> (promise opStr {st -> print "running str; "; print st; print " thanks one more time!\n"})
+
+server : {Int ->
+            [--Promise OpStr String Unit,
+             Promise OpInt Int Unit,
+             Console] Unit}
+server x = signal opInt 24; sleep 500000 -- <Promise> (signal opStr "yes")
+
+-- Executes a list of callbacks by just chaining them.
+-- Sadly can't be polymorphic in R
+-- signalAll : {List {S -> [E|]Unit} -> S -> [E|]Unit}
+-- signalAll [] _ = unit
+-- signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
+
+-- Top-level handler for promises, etc
+hdlTop : {List {Int -> [Console]Unit}
+       -> <Promise OpInt Int Unit> Unit
+       -> Unit}
+
+-- hdlTop icbs <promise opInt cb -> k> =
+--        hdlTop (snoc icbs cb) (k unit)
+
+-- hdlTop cbs <signal opInt n -> k> =
+--        signalAll cbs n;
+--        hdlTop nil (k unit)
+
+hdlPass : {<Promise OpInt Int Unit>Unit
+        -> <Promise OpInt Int Unit>Unit
+        -> [Promise OpInt Int Unit, Promise OpInt Int Unit]Unit}
+
+-- hdlPass <promise t cb -> k> <other> =
+--         promise t cb;
+--         hdlPass (k unit) other!
+
+-- hdlPass <other> <promise t cb -> k> =
+--         promise t cb;
+--         hdlPass other! (k unit)
+
+-- hdlPass <signal t arg -> k> <other> =
+--         signal t arg;
+--         hdlPass (k unit) other!
+
+-- hdlPass <other> <signal t arg -> k> =
+--         signal t arg;
+--         hdlPass other! (k unit)
+
+-- main : {[Console]Unit}
+-- main! = (hdlTop [] (<Promise (s a -> s a a)> (hdlPass ((client!)) ((server 10)))))
+
+main : {[Console]Unit}
+main! = (hdlTop [] ((server 10)))
