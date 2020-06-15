@@ -86,7 +86,7 @@ hdlProm cbs _ <await cell -> client> <server> =
 
 -- Whatevering
 hdlProm cb res <client> <whatever -> server> =
-         hdlProm cb res client! (print "whatever\n"; server unit)
+         hdlProm cb res client! (server unit)
 
 hdlProm _ _ unit _ = print "\nclient exits\n"
 hdlProm _ _ _ unit = print "\nserver exits\n"
