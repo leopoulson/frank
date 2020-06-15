@@ -7,7 +7,7 @@ interface Whatever = whatever : Unit
 
 -- Recursive type is required.
 interface Promise S R =
-            promise : {S -> [RefState, Console] R} -> (Pid R)
+            promise : {S -> [RefState, Console] R} -> Pid R
           | signal : S -> Unit
           | await : Pid R -> R
 
@@ -19,7 +19,6 @@ readPid (pid cell) = read cell
 snoc : {List X -> X -> List X}
 snoc nil x = [x]
 snoc (y :: ys) x = y :: (snoc ys x)
-
 
 client : {[Promise Int Unit, Console, RefState]Unit}
 client! = let p2 = promise {x -> print "running "; ouint (x + 15); print " thanks!\n"} in
@@ -45,14 +44,6 @@ signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
 fulfill : {Pair (Pid Unit) {Int -> [Console, RefState]Unit} -> Int -> [Console, RefState]Unit}
 fulfill (pair (pid cell) cb) arg = write cell (just (cb arg))
 
-
-fulfillAll : {List (Pair (Pid Unit) {Int -> [Console, RefState] Unit}) ->
-              Int -> [Console, RefState] Unit}
-fulfillAll [] _ = unit
-fulfillAll ((pair (pid cell) cb) :: rest) arg = write cell (just (cb arg)) ; (fulfillAll rest arg)
-
-
-
 hdlProm : {List (Pair (Pid Unit) {Int -> [RefState, Console]Unit}) -- Response Callback & End cell
         -> Maybe (Pair (Pid Unit) {Unit -> [RefState, Console, Promise Int Unit]Unit}) -- Possibly awaited computation.
         -> <Promise Int Unit> Unit
@@ -63,10 +54,6 @@ hdlProm : {List (Pair (Pid Unit) {Int -> [RefState, Console]Unit}) -- Response C
 hdlProm cbs res <promise cb -> client> <server> =
          let newPid = pid (new nothing) in
          hdlProm (snoc cbs (pair newPid cb)) res (client newPid) server!
-
--- Running all promises
--- hdlProm cbs <client> <signal x -> server> =
---         hdlProm [] ( (fulfillAll cbs x); client!) (server unit)
 
 -- Just running the top promise
 -- This is when computation is NOT blocked
