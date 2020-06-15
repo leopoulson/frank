@@ -15,9 +15,12 @@ interface Promise N S R =
 
 -- These are the forwarded messages. They are different as we want to change the
 -- resumption type later.
+-- `promiseFwd` takes an Int which is the index of the calling function.
+-- `signalFwd` then gets resumed with a map of IDs to resumptions, that are
+-- those invoked by that signal being sent.
 interface PromiseFwd N S R =
-            promiseFwd : N -> {S -> [Console] R} -> Unit
-          | signal : N -> S -> Unit
+            promiseFwd : Int -> N -> {S -> [Console] R} -> Unit
+          | signalFwd : N -> S -> Map Int (List {S -> [Console] R})
 
 snoc : {List X -> X -> List X}
 snoc nil x = [x]
@@ -25,6 +28,12 @@ snoc (y :: ys) x = y :: (snoc ys x)
 
 client : {[Promise OpInt Int Unit]Unit}
 client! = (promise opInt {x -> print "running "; ouint (x + 20); print " thanks!\n"})
+           ; (promise opInt {x -> print "running "; ouint (x + 29); print " thanks!\n"})
+
+
+client2 : {[Promise OpInt Int Unit]Unit}
+client2! = (promise opInt {x -> print "client2 running "; ouint (x + 20); print " thanks!\n"})
+           ; (promise opInt {x -> print "client2 running "; ouint (x + 29); print " thanks!\n"})
 
 server : {Int ->
             [Promise OpInt Int Unit] Unit}
@@ -36,47 +45,110 @@ signalAll : {List {S -> [E|]Unit} -> S -> [E|]Unit}
 signalAll [] _ = unit
 signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
 
--- Top-level handler for promises, etc
-hdlTop : {List {Int -> [Console]Unit}
-       -> <Promise OpInt Int Unit> Unit
+signalAllMap : {Map Int (List {S -> [E|] Unit}) -> S -> [E|] Unit}
+signalAllMap mnil _ = unit
+signalAllMap (mentry _ cbs rest) arg = signalAll cbs arg ; signalAllMap rest arg
+
+
+-- Top-level handler; processes the forwarded messages.
+hdlTop : {Map Int (List {Int -> [Console]Unit})
+       -> <PromiseFwd OpInt Int Unit> Unit
        -> [Console]Unit}
 
-hdlTop icbs <promise opInt cb -> k> =
-       hdlTop (snoc icbs cb) (k unit)
+hdlTop cbs <promiseFwd id opInt cb -> k> =
+       -- print "Taking callback\n";
+       hdlTop (appendOrInsert id cb cbs) (k unit)
 
-hdlTop cbs <signal opInt n -> k> =
-       print "Signalling\n";
-       signalAll cbs n;
-       hdlTop nil (k unit)
+-- If we are forwarded a signal, we return the callbacks.
+hdlTop cbs <signalFwd opInt n -> k> =
+       -- print "Signalling\n";
+       -- signalAllMap cbs n;
+       hdlTop mnil (k cbs)
 
 hdlTop _ unit =
-       print "Hdltop finished\n"
+       -- print "Hdltop finished\n";
+       unit
 
+-- Unary handler; converts promise effects to promiseFwd
+hdlBot : {<Promise OpInt Int Unit> Unit
+       -> [PromiseFwd OpInt Int Unit, Console] Unit}
+
+hdlBot <promise opInt cb -> k> =
+       promiseFwd 0 opInt cb;
+       hdlBot (k unit)
+
+hdlBot <signal opInt n -> k> =
+       signalFwd opInt n;
+       hdlBot (k unit)
+
+hdlBot unit = unit
+
+-- Takes one thread sending promise messages and another that forwards.
 hdlPass : {<Promise OpInt Int Unit>Unit
-        -> <Promise OpInt Int Unit>Unit
-        -> [Promise OpInt Int Unit, Console]Unit}
+        -> <PromiseFwd OpInt Int Unit>Unit
+        -> [PromiseFwd OpInt Int Unit, Console]Unit}
 
 hdlPass <promise t cb -> k> <other> =
-        promise t cb;
+        promiseFwd 0 t cb;
         hdlPass (k unit) other!
 
-hdlPass <other> <promise t cb -> k> =
-        promise t cb;
+hdlPass <other> <promiseFwd id t cb -> k> =
+        promiseFwd (id + 1) t cb;
         hdlPass other! (k unit)
 
+-- So here we take off the callbacks with index 0, and execute them on the left
+-- thread.
+-- HOWEVER: we need to send the rest of the messages down to the
+-- right-hand thread. We can't do this so far as we don't have access to the continuation
 hdlPass <signal t arg -> k> <other> =
-        signal t arg;
-        hdlPass (k unit) other!
+        let callbacks = signalFwd t arg in
+        let callbacks_0 = lookupHard eqn 0 callbacks in
 
-hdlPass <other> <signal t arg -> k> =
-        signal t arg;
-        hdlPass other! (k unit)
+        hdlPass (<Promise, PromiseFwd>(signalAll callbacks_0 arg); k unit) other!
+
+-- execute callbacks of id 0, then pass the rest down to the other thread.
+hdlPass <other> <signalFwd t arg -> k> =
+        let cbs = signalFwd t arg in
+        let cbs_0 = lookupHard eqn 0 cbs in
+
+        hdlPass ( <Promise, PromiseFwd> (signalAll cbs_0 arg); other! ) (k (dec_keys cbs))
 
 hdlPass _ unit = unit
 hdlPass unit _ = unit
 
-inter : {[Console, Promise OpInt Int Unit] Unit}
-inter! = (hdlPass (<Promise, Console>(client!)) (<Promise, Console>(server 10)))
+
+
+
+------- Running
+
+inter2 : {[PromiseFwd OpInt Int Unit, Console] Unit}
+inter2! = hdlBot (<PromiseFwd, Console>(client!))
+
+inter : {[PromiseFwd OpInt Int Unit, Console] Unit}
+inter! = hdlPass
+            (<PromiseFwd, Console>(server 10))
+            (<PromiseFwd>(hdlPass
+                    ( <PromiseFwd, Console>(client2!) )
+                    ( <PromiseFwd> (
+                       hdlBot (
+                              <PromiseFwd, Console>(client!)
+                              )
+                     )
+                    )))
 
 main : {[Console]Unit}
-main! = hdlTop [] ((inter!))
+main! = hdlTop mnil ((inter!))
+
+
+
+
+-- Map helper functions
+appendOrInsert : {Int -> {S -> [E|] R} -> Map Int (List {S -> [E|] R}) -> Map Int (List {S -> [E|] R})}
+appendOrInsert id cb mnil = mentry id [cb] mnil
+appendOrInsert id cb (mentry id' cbs rest) = if (id == id')
+               { mentry id' (snoc cbs cb) rest }
+               { mentry id' cbs (appendOrInsert id cb rest) }
+
+dec_keys : {Map Int V -> Map Int V}
+dec_keys mnil = mnil
+dec_keys (mentry k v rest) = mentry (k - 1) v (dec_keys rest)

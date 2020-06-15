@@ -13,9 +13,6 @@ interface Promise N S R =
           | signal : N -> S -> Unit
           -- | await : R
 
-snoc : {List X -> X -> List X}
-snoc nil x = [x]
-snoc (y :: ys) x = y :: (snoc ys x)
 
 client : {[Promise OpStr String Unit,
            Promise OpInt Int Unit,
