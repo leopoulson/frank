@@ -5,9 +5,8 @@ include std
 
 interface Whatever = whatever : Unit
 
--- Recursive type is required.
 interface Promise S R =
-            promise : {S -> [RefState, Console] R} -> Pid R
+            promise : {S -> R} -> Pid R
           | signal : S -> Unit
           | await : Pid R -> R
 
@@ -16,11 +15,7 @@ data Pid X = pid (Ref (Maybe X))
 readPid : {Pid X -> [RefState] (Maybe X)}
 readPid (pid cell) = read cell
 
-snoc : {List X -> X -> List X}
-snoc nil x = [x]
-snoc (y :: ys) x = y :: (snoc ys x)
-
-client : {[Promise Int Unit, Console, RefState]Unit}
+client : {[Promise Int Unit [Console], Console, RefState]Unit}
 client! = let p2 = promise {x -> print "running "; ouint (x + 15); print " thanks!\n"} in
           let p3 = promise {x -> print "running "; ouint (x + 20); print " thanks!\n"} in
           print "starting\n";
@@ -41,12 +36,12 @@ signalAll (cb :: cbs) arg = cb arg ; signalAll cbs arg
 
 -- Fulfills a single promise.
 -- Returns a computation that can have effects.
-fulfill : {Pair (Pid Unit) {Int -> [Console, RefState]Unit} -> Int -> [Console, RefState]Unit}
-fulfill (pair (pid cell) cb) arg = write cell (just (cb arg))
+fulfill : {Pair (Pid Unit) {Int -> [E|]Unit} -> Int -> [E|RefState]Unit}
+fulfill (pair (pid cell) cb) arg = write cell (just (<RefState>(cb arg)))
 
-hdlProm : {List (Pair (Pid Unit) {Int -> [RefState, Console]Unit}) -- Response Callback & End cell
-        -> Maybe (Pair (Pid Unit) {Unit -> [RefState, Console, Promise Int Unit]Unit}) -- Possibly awaited computation.
-        -> <Promise Int Unit> Unit
+hdlProm : {List (Pair (Pid Unit) {Int -> [Console]Unit}) -- Response Callback & End cell
+        -> Maybe (Pair (Pid Unit) {Unit -> [RefState, Console, Promise Int Unit [Console]]Unit}) -- Possibly awaited computation.
+        -> <Promise Int Unit [Console]> Unit                       -- Client
         -> <Promise Int Unit, Whatever> Unit
         -> [Console, RefState]Unit}
 
@@ -70,7 +65,8 @@ hdlProm (cb :: cbs) (just (pair cell res)) unit <signal x -> server> =
           { (just x) -> hdlProm cbs nothing (cbResult; res x) (server unit)
                -- if it didn't, put the result of the fulfilled promise at the
                -- front of the queue of things to do upon resumption
-          | nothing -> hdlProm cbs (just (pair cell {x -> cbResult; res x})) unit (server unit) }
+          | nothing -> hdlProm cbs (just (pair cell {x -> cbResult; res x})) unit (server unit)
+          }
 
 -- Signals with nothing to hear them just disappear.
 hdlProm [] res <client> <signal x -> server> =
