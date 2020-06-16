@@ -79,11 +79,11 @@ sch goRes (just stpr) goer <thread> <stop -> control> =
 sch goRes stpr goer <yield -> thread> <yield -> control> =
     sch goRes stpr goer (thread unit) (control unit)
 
-sch goRes (just stpr) goer <yield -> thread> <stop -> control> =
-    sch goRes nothing goer (<Yield>(stpr unit); thread unit) (control unit)
+-- sch goRes (just stpr) goer <yield -> thread> <stop -> control> =
+--     sch goRes nothing goer (<Yield>(stpr unit); thread unit) (control unit)
 
-sch goRes stpr (just goer) <yield -> thread> <go -> control> =
-    sch goRes stpr nothing (<Yield>(goer unit); thread unit) (control unit)
+-- sch goRes stpr (just goer) <yield -> thread> <go -> control> =
+--     sch goRes stpr nothing (<Yield>(goer unit); thread unit) (control unit)
 
 sch goRes stpr goer <yield -> thread> <control> =
     sch goRes stpr goer (thread unit) (control!)

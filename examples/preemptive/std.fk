@@ -54,3 +54,25 @@ concat : {List X -> List X -> List X}
 concat nil ys = ys
 concat (cons x xs) ys = cons x (concat xs ys)
 --- end of standard stuff ---
+
+leq : Int -> Int -> Bool
+leq x y = if (x == y)
+            {true}
+            {x < y}
+
+mod : Int -> Int -> Int
+mod a m = if (leq m a)
+             {mod (a - m) m}
+             {a}
+
+toc : Int -> Char
+toc x = toc2 (mod x 7)
+
+toc2 : Int -> Char
+toc2 0 = 'a'
+toc2 1 = 'b'
+toc2 2 = 'c'
+toc2 3 = 'd'
+toc2 4 = 'e'
+toc2 5 = 'f'
+toc2 6 = 'g'

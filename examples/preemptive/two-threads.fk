@@ -1,0 +1,148 @@
+include std
+
+include map
+
+-- An attempt at pre-emptive concurrency.
+
+interface Stop = stop : Int -> Unit
+
+interface Go = go : Int -> Unit
+
+interface PromiseStop = promiseStop : {Unit -> [PromiseGo, AwaitGo, PromiseStop, Console]Unit} -> Unit
+
+interface PromiseGo = promiseGo : {Unit -> [PromiseGo, AwaitGo, PromiseStop, Console]Unit} -> Unit
+
+interface AwaitGo = awaitGo : Unit
+
+interface Yield = yield : Unit
+
+waitForStop : {[PromiseStop, PromiseGo, AwaitGo, Console]Unit}
+-- First we wait for the stop signal to come in.
+-- This wait is done non-blocking.
+waitForStop! = promiseStop { _ ->
+                            -- When we receive stop we have to stop computing.
+                            -- Hence we make a new promise for Go and await
+                            -- this.
+                            promiseGo {_ -> unit};
+                            awaitGo!;
+                            -- When we receive Go, we start computing again
+                            -- and reinstall the stop waiter.
+                            waitForStop!}
+
+-- immediately starts waiting for go.
+waitForGo : {[PromiseStop, PromiseGo, AwaitGo, Console] Unit}
+waitForGo! = promiseGo {_ -> unit};
+             awaitGo!;
+             waitForStop!
+
+counter : {Int -> [Console, Yield]Unit}
+counter x = ouint x; print " ";
+            sleep 200000;
+            yield!;
+            counter (x + 1)
+
+counter2 : {Int -> [Console, Yield]Unit}
+counter2 x = ouch (toc x); print " ";
+             sleep 200000;
+             yield!;
+             counter2 (x + 1)
+
+runthread : {[PromiseStop, Console, PromiseGo, AwaitGo, Yield]Unit}
+runthread! = <Yield> waitForStop!; counter 0
+
+runthread2 : {[PromiseStop, Console, PromiseGo, AwaitGo, Yield]Unit}
+runthread2! = <Yield> waitForGo!; counter2 0
+
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+controller : {Int -> [Stop, Go, Console, Yield]Unit}
+controller k = sleepAndYield 500000;
+               stop k; print "\n*- stop "; ouint k; --print "\n";
+               go (k + 1); print "\n*- go "; ouint (k + 1); print "\n";
+               controller (k + 1)
+
+-----------------------
+-- Scheduler
+-----------------------
+
+sch : {Map Int {Unit -> [PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- rest of counter
+    -> Map Int {Unit -> [PromiseGo, AwaitGo, PromiseStop, Console]Unit}    -- stopper
+    -> Map Int {Unit -> [PromiseGo, AwaitGo, PromiseStop, Console]Unit}    -- goer
+    -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit                      -- runthread one
+    -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit                      -- runthread two
+    -> <Stop, Go, Yield>Unit                                 -- controller
+    -> [Console]Unit}
+
+-- Installing Promises
+sch goRes stprs goers <promiseStop cb -> thread1> <thread2> <control> =
+    sch goRes (insert 0 cb stprs) goers (thread1 unit) thread2! control!
+
+sch goRes stprs goers <thread1> <promiseStop cb -> thread2>  <control> =
+    sch goRes (insert 1 cb stprs) goers thread1! (thread2 unit) control!
+
+-- goers
+sch goRes stprs goers <promiseGo cb -> thread1> <thread2> <control> =
+    sch goRes stprs (insert 0 cb goers) (thread1 unit) thread2! control!
+
+sch goRes stprs goers <thread1> <promiseGo cb -> thread2>  <control> =
+    sch goRes stprs (insert 1 cb goers) thread1! (thread2 unit) control!
+
+-- Taking the resumption from Await and storing it
+sch ress stprs goers <awaitGo -> thread1> <thread2> <control> =
+    sch (insert 0 (<Console> thread1) ress) stprs goers unit thread2! control!
+
+sch ress stprs goers <thread1> <awaitGo -> thread2>  <control> =
+    sch (insert 1 (<Console> thread2) ress) stprs goers thread1! unit control!
+
+-- Executing promises
+-- Priority is given to go
+-- TODO : Change lookupHards to normal lookups.
+sch ress stprs goers <thread1> <thread2> <go k -> control> =
+    case (mod k 2)
+       { 0 ->
+           let res = lookupHard eqn 0 ress in
+           let goer = lookupHard eqn 0 goers in
+           sch (delete eqn 0 ress) stprs (delete eqn 0 goers) (let result = <Yield>(goer unit) in res result; thread1!) thread2! (control unit)
+       | 1 ->
+           let res = lookupHard eqn 1 ress in
+           let goer = lookupHard eqn 1 goers in
+           sch (delete eqn 1 ress) stprs (delete eqn 1 goers) thread1! (let result = <Yield>(goer unit) in res result; thread2!) (control unit)}
+
+-- letting stops come in, as well
+sch ress stprs goers <thread1> <thread2> <stop k -> control> =
+   case (mod k 2)
+      { 0 ->
+          let stpr = lookupHard eqn 0 stprs in
+          sch ress (delete eqn 0 stprs) goers (<Yield>(stpr unit); thread1!) thread2! (control unit)
+      | 1 ->
+          let stpr = lookupHard eqn 1 stprs in
+          sch ress (delete eqn 1 stprs) goers thread1! (<Yield>(stpr unit); thread2!) (control unit)}
+
+-- Yielding to allow messages to come into the client
+sch goRes stpr goer <yield -> thread> <thread2> <yield -> control> =
+    sch goRes stpr goer (thread unit) thread2! (control unit)
+
+sch goRes stpr goer <thread1> <yield -> thread2> <yield -> control> =
+    sch goRes stpr goer thread1! (thread2 unit) (control unit)
+
+-- Catching yield without a partner
+sch goRes stpr goer <yield -> thread1> <thread2> <control> =
+    sch goRes stpr goer (thread1 unit) thread2! (control! )
+
+sch goRes stpr goer <thread1> <yield -> thread2> <control> =
+    sch goRes stpr goer (thread1!) (thread2 unit) (control! )
+
+sch goRes stpr goer <thread1> <thread2> <yield -> control> =
+    sch goRes stpr goer thread1! thread2! (control unit)
+
+-- Finishing
+sch _ _ _ unit _ _ = print "\nThread 1 finished"
+sch _ _ _ _ unit _ = print "\nThread 2 finished"
+sch _ _ _ _ _ unit = print "\nController finished"
+
+
+main : {[Console]Unit}
+main! = sch mnil mnil mnil runthread! runthread2! (controller 0)
