@@ -2,11 +2,11 @@ include std
 
 -- Promise interface
 interface Promise [E] =
-          -- Promises are named, and have types...
           promise R : Prom R [E|] -> Pid R
-          -- Likewise signals are named too.
         | signal : Sig -> Unit
         | await R : Pid R -> R
+
+interface Tick = tick : Unit
 
 --------------------------------------
 -- This design won't work, as we need to make the type of Pid match the return
@@ -15,35 +15,71 @@ interface Promise [E] =
 -- One hack is to always just give an initial value - nothing - which is cast to
 -- Maybe R. Then use this to fill the ref cell.
 
-data Prom R [E] = opIntCb {Int -> [E|] R} (Maybe Unit)
+data Prom R [E] = opIntCb {Int -> [E|] R}
 
 data Sig = opIntSig Int
 
 data Pid X = pid (Ref (Maybe X))
 
-client : {[Promise [Console]]Unit}
-client! = let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"} (just unit)) in
-              unit -- await res; unit
+readPid : {Pid X -> [RefState] (Maybe X)}
+readPid (pid cell) = read cell
 
-server : {Int -> [Promise] Unit}
-server x = signal (opIntSig x)
+pr : {Prom Unit [Console]}
+pr! = opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit}
 
-hdl : {List (Pair (Pid Unit) {Int -> [Console] Unit})
-    -> <Promise [Console]> Unit      -- client
-    -> <Promise> Unit                -- server
+client : {[Promise [Console], Console]Unit}
+client! = print "starting!\n";
+          let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+          await res;
+          print "Finished!\n";
+          unit
+
+server : {Int -> [Promise, Console, Tick] Unit}
+server x = sleep 1000000; tick!; signal (opIntSig x)
+
+-- Given a pid and a callback, rewrites the callback such that it writes the
+-- result to the cell and returns unit, whilst still performing effects as before.
+to_write : {Pid R -> {S -> [Console, RefState]R} -> {S -> [Console, RefState] Unit}}
+to_write (pid cell) cb = {x -> (write cell (just (cb x)))}
+
+-- Handler / scheduler
+hdl : {List ({Int -> [Console, RefState]Unit})
+    -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console, RefState], RefState] Unit})                  -- possibly suspended client
+    -> <Promise [Console, RefState]> Unit      -- client
+    -> <Promise, Tick> Unit                -- server
     -> [Console, RefState] Unit}
 
-hdl cbs <promise (opIntCb cb init_val) -> client> <server> =
-    let cell = new init_val in
-    -- hdl (snoc cbs (pair (pid cell) cb)) (client (pid cell)) (server!)
-    hdl (cbs ) (client (pid cell)) (server!);
-    unit
+-- Installing promises.
+hdl cbs res <promise (opIntCb cb) -> client> <server> =
+    let cell = pid (new nothing) in
+    hdl (snoc cbs (<RefState, Console>(to_write cell cb))) res (client cell) (server!)
 
--- hdl (cb :: cbs) <client> <signal (opIntSig x) -> server> =
---     hdl cbs (<Promise, RefState> (cb x); client!) (server unit)
+-- Processing incoming signals without blocked computation.
+hdl (cb :: cbs) nothing <client> <signal (opIntSig x) -> server> =
+    hdl cbs nothing (<Promise> (cb x); client!) (server unit)
 
-hdl _ unit _ = unit
-hdl _ _ unit = unit
+-- Processing incoming signals with blocked comp.
+hdl (cb :: cbs) (just (pair cell resumption)) unit <signal (opIntSig x) -> server> =
+    -- First run the callback.
+    let cbResult = cb x in
+    -- Then check if the cell has had a value put in it as a result.
+    case (readPid cell)
+       -- if we have a result, apply whatever the result of the comp is and then resume
+       { (just result) -> hdl cbs nothing (cbResult; resumption result) (server unit)
+       -- if we do not, just try again
+       | nothing -> hdl cbs (just (pair cell resumption)) unit (server unit)}
+
+hdl cbs res <await cell -> client> <server> =
+    case (readPid cell)
+      { (just x) -> print "straight through\n"; hdl cbs nothing (client x) server!
+      | nothing  -> hdl cbs (just (pair cell client)) unit server! }
+
+hdl cbs res <client> <tick -> server> =
+    hdl cbs res client! (server unit)
+
+
+hdl _ _ unit _ = unit
+hdl _ _ _ unit = unit
 
 main : {[Console, RefState] Unit}
-main! = hdl [] (<Console, RefState>(client!)) (<Console, RefState>(server 10))
+main! = hdl [] nothing client! (<RefState>(server 10))
