@@ -1,0 +1,36 @@
+include std
+
+-- Promise interface
+interface Promise [E] =
+          -- Promises are named, and have types...
+          promise : Prom [E|] -> Unit
+          -- Likewise signals are named too.
+        | signal : Sig -> Unit
+
+data Prom [E] = opIntCb {Int -> [E|] Unit}
+
+data Sig = opIntSig Int
+
+client : {[Promise [Console]]Unit}
+client! = promise  (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"})
+
+server : {Int -> [Promise] Unit}
+server x = signal (opIntSig x)
+
+
+hdl : {List {Int -> [Console] Unit}
+    -> <Promise [Console]> Unit      -- client
+    -> <Promise> Unit                -- server
+    -> [Console] Unit}
+
+hdl cbs <promise (opIntCb cb) -> client> <server> =
+    hdl (snoc cbs cb) (client unit) (server!)
+
+hdl (cb :: cbs) <client> <signal (opIntSig x) -> server> =
+    hdl cbs (<Promise> (cb x); client!) (server unit)
+
+hdl _ unit _ = unit
+hdl _ _ unit = unit
+
+main : {[Console] Unit}
+main! = hdl [] (<Console>(client!)) (<Console>(server 10))

@@ -1,0 +1,6 @@
+sch : {Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- stopper
+    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- goer
+    -> Maybe {Unit -> [RefState, PromiseGo, AwaitGo, PromiseStop, Console, Yield]Unit}    -- goer
+    -> <PromiseStop, PromiseGo, AwaitGo, Yield>Unit
+    -> <Stop, Go>Unit
+    -> [Console, RefState]Unit}

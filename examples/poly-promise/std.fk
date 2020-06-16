@@ -1,0 +1,99 @@
+--- start of standard stuff ---
+
+data Pair X Y = pair X Y
+
+fst : Pair X Y -> X
+fst (pair x _) = x
+
+snd : Pair X Y -> Y
+snd (pair _ y) = y
+
+data Maybe X = nothing | just X
+
+map : {{X -> Y} -> List X -> List Y}
+map f []        = []
+map f (x :: xs) = f x :: map f xs
+
+print : {String -> [Console]Unit}
+print s = map ouch s; unit
+
+-- lazy conditional
+if : {Bool -> {X} -> {X} -> X}
+if true  t f = t!
+if false t f = f!
+
+while : {Bool} -> {Unit} -> Unit
+while cond body = if cond! { body!; while cond body }
+                            { unit }
+
+and : {Bool -> Bool -> Bool}
+and true  y = y
+and false _ = false
+
+not : Bool -> Bool
+not true = false
+not false = true
+
+take : {Int -> List X -> List X}
+take 0 _ = nil
+take k (cons x xs) = cons x (take (k - 1) xs)
+
+drop : {Int -> List X -> List X}
+drop 0 xs = xs
+drop k nil = nil
+drop k (cons x xs) = drop (k - 1) xs
+
+range : Int -> Int -> List Int
+range from to = if (from == to)
+                   {nil}
+                   {cons from (range (from + 1) to)}
+
+nth : {Int -> List X -> X}
+nth 0 (cons s _)  = s
+nth k (cons _ xs) = nth (k - 1) xs
+
+len : {List X -> Int}
+len nil = 0
+len (cons _ xs) = 1 + len xs
+
+concat : {List X -> List X -> List X}
+concat nil ys = ys
+concat (cons x xs) ys = cons x (concat xs ys)
+
+
+snoc : {List X -> X -> List X}
+snoc nil x = [x]
+snoc (y :: ys) x = y :: (snoc ys x)
+--- end of standard stuff ---
+
+------ map stuff
+data Map K V = mentry K V (Map K V) | mnil
+
+lookup : {{K -> K -> Bool} -> K -> Map K V -> Maybe V}
+lookup _ _ mnil = nothing
+lookup eq k (mentry k' v rest) = if (eq k k') {just v} {lookup eq k rest}
+
+lookupHard : {{K -> K -> Bool} -> K -> Map K V -> V}
+-- lookupHard _ _ (map nil) = nothing
+lookupHard eq k (mentry k' v rest) = if (eq k k') {v} {lookupHard eq k rest}
+
+delete : {{K -> K -> Bool} -> K -> Map K V -> Map K V}
+delete _ _ mnil = mnil
+delete eq k (mentry k' v rest) = if (eq k k') {delete eq k rest} {mentry k' v (delete eq k rest)}
+
+insert : K -> V -> Map K V -> Map K V
+insert key value m = mentry key value m
+
+modify : {K -> K -> Bool}    -- equality
+      -> {V -> V}            -- modifying function
+      -> K                   -- index
+      -> Map K V             -- init map
+      -> Map K V             -- resulting map
+modify _ _ _ mnil = mnil
+modify eq mdfy k (mentry k' v rest) = if (eq k k')
+       { mentry k' (mdfy v) (modify eq mdfy k rest) }
+       { mentry k' v        (modify eq mdfy k rest) }
+------ end map stuff
+
+eqn : {Int -> Int -> Bool}
+eqn x y = x == y
