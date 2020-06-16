@@ -1,0 +1,55 @@
+include std
+
+-- Promise interface
+interface Promise [E] =
+          -- Promises are named, and have types...
+          promise R : Prom R [E|] -> Pid R
+          -- Likewise signals are named too.
+        | signal : Sig -> Unit
+        | await R : Pid R -> R
+
+--------------------------------------
+-- This design won't work, as we need to make the type of Pid match the return
+-- type of the callback.
+--
+-- One hack is to always just give an initial value - nothing - which is cast to
+-- Maybe R. Then use this to fill the ref cell.
+
+data Prom R [E] = opIntCb {Int -> [E|] R}
+
+data Sig = opIntSig Int
+
+data Pid X = pid (Ref (Maybe X))
+
+pr : {Prom Unit [Console]}
+pr! = opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit}
+
+client : {[Promise [Console]]Unit}
+client! = let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+              unit
+
+server : {Int -> [Promise] Unit}
+server x = signal (opIntSig x)
+
+-- Given a pid and a callback, rewrites the callback such that it writes the
+-- result to the cell and returns unit, whilst still performing effects as before.
+to_write : {Pid R -> {S -> [Console, RefState]R} -> {S -> [Console, RefState] Unit}}
+to_write (pid cell) cb = {x -> (write cell (just (cb x)))}
+
+hdl : {List ({Int -> [Console, RefState]Unit})
+    -> <Promise [Console, RefState]> Unit      -- client
+    -> <Promise> Unit                -- server
+    -> [Console, RefState] Unit}
+
+hdl cbs <promise (opIntCb cb) -> client> <server> =
+    let cell = pid (new nothing) in
+    hdl (snoc cbs (<RefState, Console>(to_write cell cb))) (client cell) (server!)
+
+hdl (cb :: cbs) <client> <signal (opIntSig x) -> server> =
+    hdl cbs (<Promise> (cb x); client!) (server unit)
+
+hdl _ unit _ = unit
+hdl _ _ unit = unit
+
+main : {[Console, RefState] Unit}
+main! = hdl [] (<Console>(client!)) (<Console, RefState>(server 10))

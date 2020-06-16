@@ -5,26 +5,27 @@ interface Promise [E] =
           -- Promises are named, and have types...
           promise : Prom [E|] -> Unit
           -- Likewise signals are named too.
-        | signal : Sig -> Unit
+        | signal : Prom [] -> Unit
 
 --------------------------------------
--- We have to split the two, as otherwise we have to write effect annotations on
--- the signals. This isn't really very good, would be better to join them up?
+-- So here we declare both the callback operation and the signature together.
+-- This is also fine, but means we have to write `Promise []` everywhere, which
+-- is sort of annoying
 
-data Prom [E] = opIntCb {Int -> [E|] Unit}
+data Prom [E] = opIntCb {Int -> [E|] Unit} | opIntSig Int
 
-data Sig = opIntSig Int
+-- data Sig = opIntSig Int
 
 client : {[Promise [Console]]Unit}
 client! = promise  (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"})
 
-server : {Int -> [Promise] Unit}
+server : {Int -> [Promise []] Unit}
 server x = signal (opIntSig x)
 
 
 hdl : {List {Int -> [Console] Unit}
     -> <Promise [Console]> Unit      -- client
-    -> <Promise> Unit                -- server
+    -> <Promise [] > Unit                -- server
     -> [Console] Unit}
 
 hdl cbs <promise (opIntCb cb) -> client> <server> =
