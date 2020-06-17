@@ -73,8 +73,9 @@ server x = sleep 400000; tick!; signal (opIntSig x);
 
 -- Given a pid and a callback, rewrites the callback such that it writes the
 -- result to the cell and returns unit, whilst still performing effects as before.
-to_write : {Pid R -> {S -> [Console, RefState]R} -> {S -> [Console, RefState] Unit}}
-to_write (pid cell) cb = {x -> (write cell (just (cb x)))}
+-- Adds RefState to the ambient in the promise.
+to_write : {Pid R -> {S -> [E|]R} -> {S -> [E| RefState] Unit}}
+to_write (pid cell) cb = {x -> (write cell (just (<RefState>(cb x))))}
 
 -- Converts a function of Int -> Unit to one of Sig -> unit.
 prep_int : {{Int -> [E|]Unit} -> {Sig -> [E|]Unit}}
@@ -90,8 +91,8 @@ prep_str cb = {st -> case (st)
 
 -- Handler / scheduler
 hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})                                      -- Promise storer
-    -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console, RefState], RefState] Unit})                  -- possibly suspended client
-    -> <Promise [Console, RefState]> Unit      -- client
+    -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console], RefState] Unit})              -- possibly suspended client
+    -> <Promise [Console]> Unit      -- client
     -> <Promise, Tick> Unit                    -- server
     -> [Console, RefState] Unit}
 
@@ -100,13 +101,13 @@ hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})                          
 hdl cbs res <promise (opIntCb cb) -> client> <server> =
     let cell = pid (new nothing) in
     -- look at how they massacred my boy!
-    let cbMod = prep_int (<RefState, Console> (to_write cell cb)) in
+    let cbMod = prep_int (<Console> (to_write cell cb)) in
     hdl (snocOrInsert (opIntSig 0) cbMod cbs) res (client cell) server!
 
 -- same for strings
 hdl cbs res <promise (opStrCb cb) -> client> <server> =
     let cell = pid (new nothing) in
-    let cbMod = prep_str (<RefState, Console> (to_write cell cb)) in
+    let cbMod = prep_str (<Console> (to_write cell cb)) in
     hdl (snocOrInsert (opStrSig "") cbMod cbs) res (client cell) server!
 
 -- Processing incoming signals without blocked computation.
@@ -147,4 +148,4 @@ hdl _ _ unit _ = unit
 hdl _ _ _ unit = unit
 
 main : {[Console, RefState] Unit}
-main! = hdl mnil nothing client! (<RefState>(server 10))
+main! = hdl mnil nothing (<RefState>(client!)) (<RefState>(server 10))
