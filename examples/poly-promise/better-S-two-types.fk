@@ -13,6 +13,7 @@ snocOrInsert sig x (mentry sig' xs rest) =
 -- equality between signals
 eqSig : {Sig -> Sig -> Bool}
 eqSig (opIntSig _) (opIntSig _) = true
+eqSig (opStrSig _) (opStrSig _) = true
 eqSig _ _ = false
 
 peek : {Sig -> Map Sig (List X) -> Maybe X}
@@ -44,10 +45,10 @@ interface Promise [E] =
 
 interface Tick = tick : Unit
 
-data Prom R [E] = opIntCb {Int -> [E|] R}
+data Prom R [E] = opIntCb {Int -> [E|] R} | opStrCb {String -> [E|] R}
 
 -- TODO: Change this to be labels; so that it's op S Int?
-data Sig = opIntSig Int
+data Sig = opIntSig Int | opStrSig String
 
 data Pid X = pid (Ref (Maybe X))
 
@@ -60,12 +61,15 @@ pr! = opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit}
 client : {[Promise [Console], Console]Unit}
 client! = print "starting!\n";
           let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+          let resStr = promise (opStrCb {st -> print "stringing "; print st; print " thanks!\n"; unit} ) in
           await res;
+          await resStr;
           print "Finished!\n";
           unit
 
 server : {Int -> [Promise, Console, Tick] Unit}
-server x = sleep 1000000; tick!; signal (opIntSig x)
+server x = sleep 400000; tick!; signal (opIntSig x);
+           sleep 400000; tick!; signal (opStrSig "hello!")
 
 -- Given a pid and a callback, rewrites the callback such that it writes the
 -- result to the cell and returns unit, whilst still performing effects as before.
@@ -74,12 +78,18 @@ to_write (pid cell) cb = {x -> (write cell (just (cb x)))}
 
 -- Converts a function of Int -> Unit to one of Sig -> unit.
 prep_int : {{Int -> [E|]Unit} -> {Sig -> [E|]Unit}}
-prep_int cb = ({s -> case (s)
-                    { (opIntSig x) -> cb x}
-                    | _ -> unit})
+prep_int cb = {s -> case (s)
+                    { (opIntSig x) -> cb x
+                    | _ -> unit }}
+
+-- as above, for strings.
+prep_str : {{String -> [E|] Unit} -> {Sig -> [E|]Unit}}
+prep_str cb = {st -> case (st)
+                     { (opStrSig st) -> cb st
+                     | _ -> unit}}
 
 -- Handler / scheduler
-hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})
+hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})                                      -- Promise storer
     -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console, RefState], RefState] Unit})                  -- possibly suspended client
     -> <Promise [Console, RefState]> Unit      -- client
     -> <Promise, Tick> Unit                    -- server
@@ -93,26 +103,31 @@ hdl cbs res <promise (opIntCb cb) -> client> <server> =
     let cbMod = prep_int (<RefState, Console> (to_write cell cb)) in
     hdl (snocOrInsert (opIntSig 0) cbMod cbs) res (client cell) server!
 
+-- same for strings
+hdl cbs res <promise (opStrCb cb) -> client> <server> =
+    let cell = pid (new nothing) in
+    let cbMod = prep_str (<RefState, Console> (to_write cell cb)) in
+    hdl (snocOrInsert (opStrSig "") cbMod cbs) res (client cell) server!
+
 -- Processing incoming signals without blocked computation.
-hdl cbs nothing <client> <signal (opIntSig x) -> server> =
+hdl cbs nothing <client> <signal sig -> server> =
     -- Look to see if there's any promises of this type waiting.
-    case (peek (opIntSig x) cbs)
+    case (peek sig cbs)
       -- if not, do nothing and return.
       { nothing -> hdl cbs nothing client! (server unit)
       -- if there is, run it on the client's side and remove it.
-      | (just cb) -> hdl (pop (opIntSig x) cbs) nothing (<Promise> (cb (opIntSig x)); client!) (server unit)}
-    -- hdl cbs nothing (<Promise> (cb x); client!) (server unit)
+      | (just cb) -> hdl (pop sig cbs) nothing (<Promise> (cb sig); client!) (server unit)}
 
 -- Processing incoming signals with blocked comp.
-hdl cbs (just (pair cell resumption)) unit <signal (opIntSig x) -> server> =
+hdl cbs (just (pair cell resumption)) unit <signal sig -> server> =
     -- If there's no callbacks of this type to run, just don't do anything.
-    case (peek (opIntSig x) cbs)
+    case (peek sig cbs)
      { nothing -> hdl cbs (just (pair cell resumption)) unit (server unit)
      | (just cb) ->
        -- First run the callback.
-       let cbResult = cb (opIntSig x) in
+       let cbResult = cb sig in
        -- Then remove it from storage.
-       let poppedCbs = pop (opIntSig x) cbs in
+       let poppedCbs = pop sig cbs in
        -- Then check if the cell has had a value put in it as a result.
        case (readPid cell)
           -- if we have a result, apply whatever the result of the comp is and then resume
@@ -122,7 +137,7 @@ hdl cbs (just (pair cell resumption)) unit <signal (opIntSig x) -> server> =
 
 hdl cbs res <await cell -> client> <server> =
     case (readPid cell)
-      { (just x) -> print "straight through\n"; hdl cbs nothing (client x) server!
+      { (just x) -> hdl cbs nothing (client x) server!
       | nothing  -> hdl cbs (just (pair cell client)) unit server! }
 
 hdl cbs res <client> <tick -> server> =
