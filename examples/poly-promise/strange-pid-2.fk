@@ -1,0 +1,219 @@
+include std
+
+include map
+
+---------------- Helpers
+snocOrInsert : {Sig -> X -> Map Sig (List X) -> Map Sig (List X)}
+snocOrInsert sig x mnil = mentry sig [x] mnil
+snocOrInsert sig x (mentry sig' xs rest) =
+    if (eqSig sig sig')
+      { mentry sig' (snoc xs x) rest }
+      { mentry sig' xs (snocOrInsert sig x rest) }
+
+-- equality between signals
+eqSig : {Sig -> Sig -> Bool}
+eqSig (opIntSig _) (opIntSig _) = true
+eqSig (opStrSig _) (opStrSig _) = true
+eqSig _ _ = false
+
+peek : {Sig -> Map Sig (List X) -> Maybe X}
+peek _ mnil = nothing
+peek sig (mentry sig' xs rest) =
+    if (eqSig sig sig')
+       { case (xs)
+         { nil -> nothing
+         | (cb :: cbs) -> just cb }}
+       { peek sig rest }
+
+tail : {List X -> List X}
+tail nil = nil
+tail (x::xs) = xs
+
+pop : {Sig -> Map Sig (List X) -> Map Sig (List X)}
+pop _ mnil = mnil
+pop sig (mentry sig' xs rest) =
+    if (eqSig sig sig')
+       { mentry sig' (tail xs) rest}
+       { mentry sig' xs (pop sig rest) }
+---------------- end helpers
+
+-- Promise interface
+interface Promise  =
+          promise R : Prom R  -> Pid R
+        | signal : Sig -> Unit
+        | await R : Pid R  -> R
+
+interface Tick = tick : Unit
+
+-- interface CheckResolved = checkResolved : Unit
+
+data Prom R  = opIntCb {Int -> [Console, RefState, Promise] R} | opStrCb {String ->  R}
+
+data Sig = opIntSig Int | opStrSig String
+
+
+----------------
+-- Pid stuff
+
+-- data PromiseStatus X [E] = susp {Sig -> [E | RefState] Unit} | done X | empty
+-- data PromiseStatus X = susp {Sig -> [Console, RefState] Unit} | done X | empty
+data PromiseStatus X = done X | empty | addRes {X -> [Console, RefState, Promise ]Unit}
+-- data PromiseStatus X = done X | empty | addRes {X -> [Console, RefState]Unit}
+
+-- data Pid X = pid (Ref (Maybe X))
+data Pid X = pid (Ref (PromiseStatus X ))
+
+readPid : {Pid X -> [RefState] PromiseStatus X}
+readPid (pid cell) = read cell
+
+writePid : {Pid X -> PromiseStatus X -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+readPid2 : {Pid X -> [RefState] (Maybe X)}
+readPid2 (pid cell) = case (read cell)
+                        { (done x) -> just x
+                        | _ -> nothing }
+
+------------
+-- Thread code
+
+-- client : {[Promise , Console]Unit}
+client : {[Promise , Console]Unit}
+client! = print "starting!\n";
+          let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+          await res;
+          -- let resStr = promise (opStrCb {st -> print "stringing "; print st; print " thanks!\n"; unit} ) in
+          -- await resStr;
+          print "\nFinished!\n";
+          unit
+
+-- server : {Int -> [Promise [Console, RefState], Console, Tick] Unit}
+server : {Int -> [Promise , Console, Tick] Unit}
+server x = sleep 400000; tick!; signal (opIntSig x);
+           sleep 400000; tick!; signal (opStrSig "hello!")
+
+
+----------------
+-- Handler prep
+
+-- Given a pid and a callback, rewrites the callback such that it writes the
+-- result to the cell and returns unit, whilst still performing effects as before.
+-- Adds RefState to the ambient in the promise.
+to_write : {Pid R -> {S -> [Console, RefState, Promise]R} -> {S -> [Console, RefState, Promise] Unit}}
+to_write (pid cell) cb = {x -> case (read cell)
+                            { empty -> (write cell (done ((cb x))))
+                            -- }}
+                            | (addRes resumption) -> resumption ((cb x)) }}
+
+-- Converts a function of Int -> Unit to one of Sig -> unit.
+prep_int : {{Int -> [E|]Unit} -> {Sig -> [E|]Unit}}
+prep_int cb = {s -> case (s)
+                    { (opIntSig x) -> cb x
+                    | _ -> unit }}
+
+-- as above, for strings.
+prep_str : {{String -> [E|] Unit} -> {Sig -> [E|]Unit}}
+prep_str cb = {st -> case (st)
+                     { (opStrSig st) -> cb st
+                     | _ -> unit}}
+
+
+----------------
+-- Handlers
+
+-- newCell : {[RefState] Pid X}
+-- newCell! = pid (new empty)
+
+-- hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})                                      -- Promise storer
+--     -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console, RefState], RefState] Unit})              -- possibly suspended client
+--     -> <Promise [Console, RefState]> Unit      -- client
+--     -> <Promise [Console, RefState], Tick> Unit                    -- server
+--     -> [Console, RefState] Unit}
+
+hdl : {Map Sig (List {Sig -> [Console, RefState, Promise]Unit})                                      -- Promise storer
+    -> Maybe (Pair (Pid R) {R -> [Console, Promise , RefState] Unit})              -- possibly suspended client
+    -> <Promise > Unit      -- client
+    -> <Promise , Tick> Unit                    -- server
+    -> [Console, RefState] Unit}
+
+-- Checking if the blocked comp has just been resolved.
+-- hdl cbs (just (pair cell resumption)) <checkResolved -> client> <server> =
+--     -- first check if the cell now has a value written in it.
+--     case (readPid2 cell)
+--         -- if it doesn't, then keep the blocked comp and continue
+--         { nothing -> hdl cbs (just (pair cell resumption)) (client unit) server!
+--         -- if it does, great news; we run the rest of the blocked computation.
+--         | (just result) -> hdl cbs nothing (client unit; resumption result) server!
+--         }
+
+-- Installing promises
+-- cbMod is the original callback, modified to make its input and return types generic.
+hdl cbs res <promise (opIntCb cb) -> client> <server> =
+    let cell = pid (new empty) in
+    -- look at how they massacred my boy!
+    let cbMod = prep_int (<Console, RefState, Promise>(to_write cell cb)) in
+    hdl (snocOrInsert (opIntSig 0) cbMod cbs) res (client cell) server!
+
+-- -- same for strings
+-- hdl cbs res <promise (opStrCb cb) -> client> <server> =
+--     let cell = pid (new nothing) in
+--     let cbMod = prep_str (<Console> (to_write cell cb)) in
+--     hdl (snocOrInsert (opStrSig "") cbMod cbs) res (client cell) server!
+
+-- Processing incoming signals without blocked computation.
+hdl cbs nothing <client> <signal sig -> server> =
+    -- Look to see if there's any promises of this type waiting.
+    case (peek sig cbs)
+      -- if not, do nothing and return.
+      { nothing -> hdl cbs nothing client! (server unit)
+      -- if there is, run it on the client's side and remove it.
+      -- | (just cb) -> hdl (pop sig cbs) nothing ((<Promise> (cb sig); client!)) (server unit)}
+      | (just cb) -> hdl (pop sig cbs) nothing (( (cb sig); client!)) (server unit)}
+
+-- -- Processing incoming signals with blocked comp.
+-- hdl cbs (just blocked) unit <signal sig -> server> =
+--     -- If there's no callbacks of this type to run, just don't do anything.
+--     case (peek sig cbs)
+--      { nothing -> hdl cbs (just blocked) unit (server unit)
+--      -- Rather than check straight away, run the callback on the correct thread and then
+--      -- check if this resolves the blocking.
+--      -- Because we only do this once when a signal comes in, it's not as bad efficiency-wise as polling, etc
+--      | (just cb) -> hdl (pop sig cbs) (just blocked) (<Promise>(cb sig); checkResolved!) (server unit)}
+
+-- -- Installing a blockage.
+-- hdl cbs res <await cell -> client> <server> =
+--     case (readPid2 cell)
+--       { (just x) -> hdl cbs nothing (client x) server!
+--       | nothing  -> hdl cbs (just (pair cell client)) unit server! }
+
+-- Blocking for await.
+-- hdl cbs res <await cell -> client> <server> =
+--     -- Let's check out the cell!
+--     case (read cell)
+--        { (done x) -> hdl cbs res (client x) server!
+--     }
+
+-- Blocking
+hdl cbs res <await cell -> client> <server> =
+    -- Let's pop this baby open
+    case (<Console>(readPid cell))
+      -- If we already have a returned value, we just invoke the resumption with this.
+      { (done x) -> hdl cbs res (client x) server!
+      -- If we still don't have a value, we need to add to the end of the callback with the
+      -- resumption.
+      -- So we write into the cell with 'addRes'.
+      | empty ->
+                 <Console>(writePid cell (addRes (<Promise>(client))));
+                 hdl cbs res unit server!;
+                 unit }
+      -- }
+
+hdl cbs res <client> <tick -> server> =
+    hdl cbs res client! (server unit)
+
+hdl _ _ unit _ = unit
+hdl _ _ _ unit = unit
+
+main : {[Console, RefState] Unit}
+main! = hdl mnil nothing (<RefState>(client!)) (<RefState>(server 10))
+-- main! = hdl mnil nothing (unit) (unit)
