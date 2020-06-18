@@ -5,18 +5,17 @@ include map
 include helpers
 
 -- Promise interface
-interface Promise [E] =
-          promise R : Prom R [E|] -> Pid R
+interface Promise =
+          promise R : Prom R [Promise, RefState] -> Pid R
         | signal : Sig -> Unit
         | await R : Pid R -> R
 
 interface Tick = tick : Unit
 
-data Prom R [E] = opIntCb {Int -> [E|] R} | nextCb {Unit -> [E|] R}
+data Prom R [E] = nextCb {Unit -> [E|] R}
 
 -- TODO: Change this to be labels; so that it's op S Int?
 data Sig = opIntSig Int | nextSig Unit
-
 
 -- equality between signals
 eqSig : {Sig -> Sig -> Bool}
@@ -32,8 +31,9 @@ readPid (pid cell) = read cell
 -- Given a pid and a callback, rewrites the callback such that it writes the
 -- result to the cell and returns unit, whilst still performing effects as before.
 -- Adds RefState to the ambient in the promise.
-to_write : {Pid R -> {S -> [E|]R} -> {S -> [E| RefState] Unit}}
-to_write (pid cell) cb = {x -> (write cell (just (<RefState>(cb x))))}
+to_write : Pid R -> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> let res = (cb x) in
+                               write cell (just res)}
 
 -- Converts a function of Int -> Unit to one of Sig -> unit.
 prep_int : {{Int -> [E|]Unit} -> {Sig -> [E|]Unit}}
@@ -41,16 +41,22 @@ prep_int cb = ({s -> case (s)
                     { (opIntSig x) -> cb x}
                     | _ -> unit})
 
-prep_next : {{Unit -> [E|] Unit} -> {Sig -> [E|]Unit}}
+prep_next : {{Unit -> [E|]Unit} -> {Sig -> [E|]Unit}}
 prep_next cb = {s -> case (s)
                     { (nextSig x) -> cb x
                     | _ -> unit}}
 
 ----------------------
 -- Thread code
+--
+
+next : {[Console, Promise [Console], RefState]Unit}
+next! = print "oops!\n"
+        ; promise (nextCb {_ -> next!})
+        ; unit
 
 client : {[Promise [Console]]Unit}
-client! = promise (nextCb {_ -> print "oops!\n"})
+client! = promise (nextCb {_ -> next!})
           ; unit
 
 user : {[Console, Promise] Unit}
@@ -59,28 +65,28 @@ user! = inch!; print "inched\n";
 
 -----------------------
 -- Handler / scheduler
-hdl : {Map Sig (List {Sig -> [Console, RefState]Unit})  -- callbacks
-    -> Maybe (Pair (Pid R) {R -> [Console, Promise [K|], RefState] Unit})                  -- possibly suspended client
+hdl : {Map Sig (List {Sig -> [Promise [Console], Console, RefState]Unit})  -- callbacks
+    -- -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console], RefState] Unit})                  -- possibly suspended client
     -> <Promise [Console]> Unit      -- client
     -> <Promise> Unit -- user
     -> [Console, RefState] Unit}
 
 -- Installing promises
 -- cbMod is the original callback, modified to make its input and return types generic.
-hdl cbs res <promise (nextCb cb) -> client> <user> =
+hdl cbs <promise (nextCb cb) -> client> <user> =
     let cell = pid (new nothing) in
-    let cbMod = prep_next (<Console, RefState> (to_write cell cb)) in
-    hdl (snocOrInsert (nextSig unit) cbMod cbs) res (client cell) user!
+    let cbMod = (prep_next (to_write cell cb)) in
+    hdl (snocOrInsert (nextSig unit) cbMod cbs) (client cell) user!;
+    unit
 
 -- Processing incoming signals without blocked computation.
-hdl cbs nothing <client> <signal sig -> user> =
+hdl cbs <client> <signal sig -> user> =
     -- Look to see if there's any promises of this type waiting.
     case (peek sig cbs)
       -- if not, do nothing and return.
-      { nothing -> hdl cbs nothing client! (user unit)
+      { nothing -> hdl cbs client! (user unit)
       -- if there is, run it on the client's side and remove it.
-      | (just cb) -> hdl (pop sig cbs) nothing (<Promise> (cb sig); client!) (user unit) }
-    -- hdl cbs nothing (<Promise> (cb x); client!) (server unit)
+      | (just cb) -> hdl (pop sig cbs) ((cb sig); client!) (user unit) }
 
 -- -- Processing incoming signals with blocked comp.
 -- hdl cbs (just (pair cell resumption)) unit <signal sig -> server> =
@@ -104,8 +110,8 @@ hdl cbs nothing <client> <signal sig -> user> =
 --       { (just x) -> print "straight through\n"; hdl cbs nothing (client x) server!
 --       | nothing  -> hdl cbs (just (pair cell client)) unit server! }
 
-hdl _ _ unit _ = print "over"; unit
-hdl _ _ _ unit = unit
+hdl _  unit _ = print "over"; unit
+hdl _ _ unit = unit
 
 main : {[Console, RefState] Unit}
-main! = hdl mnil nothing (<Console, RefState>(client!)) (<RefState>(user!))
+main! = hdl mnil (<Console, RefState>(client!)) (<RefState>(user!))
