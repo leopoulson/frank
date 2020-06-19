@@ -38,7 +38,7 @@ pop sig (mentry sig' xs rest) =
 ---------------- end helpers
 
 -- Promise interface
-interface Promise  =
+interface Promise =
           promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
         | signal : Sig -> Unit
         | await R : Pid R [Promise, RefState] -> R
