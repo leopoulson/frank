@@ -11,9 +11,9 @@ interface Yield = yield : Unit
 -- Promise structures.
 
 interface Promise =
-          promise R : Prom R [Promise, RefState] -> Pid R
+          promise R : Prom R [Promise, RefState, Yield] -> Pid R [Promise, RefState, Yield]
         | signal : Sig -> Unit
-        | await R : Pid R -> R
+        | await R : Pid R [Promise, RefState, Yield]-> R
 
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
@@ -29,11 +29,19 @@ eqSig (goSig _) (goSig _) = true
 eqSig (stopSig _) (stopSig _) = true
 eqSig _ _ = false
 
--- Process ID
-data Pid X = pid (Ref (Maybe X))
 
-readPid : {Pid X -> [RefState] (Maybe X)}
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = empty | done X | addRes {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
 
 ----------------------------
 -- Threads
@@ -45,22 +53,23 @@ counter x = ouint x; print " ";
             counter (x + 1)
 
 -- Install an interrupt handler for stopping.
-waitForStop : {[Console, Promise[Console], RefState]Unit}
+waitForStop : {[Console, Promise[Console], RefState, Yield]Unit}
 waitForStop! =
     promise (stopCb { _ ->
                        print "stopping\n";
                        -- When we receive stop, we stop; so we install go and
                        -- block on it.
+                       --
                        let goPromise = promise (goCb {_ -> unit}) in
                        await goPromise;
+                       --
                        -- Once go has been sent, we allow the thread to continue
                        -- computing and reinstall the stop waiter.
                        waitForStop!})
     ; unit
 
 thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
-thread1! = print "starting"; <Yield>(waitForStop!); counter 0
-
+thread1! = print "starting"; (waitForStop!); counter 0
 
 controller : {[Promise [Console], Console, RefState, Yield] Unit}
 controller! = print "\n*- Stop\n"; -- signal (stopSig unit)
@@ -74,9 +83,10 @@ controller! = print "\n*- Stop\n"; -- signal (stopSig unit)
 ----------------------------
 -- Callback utilities
 
-to_write : Pid R -> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
-to_write (pid cell) cb = {x -> let res = (cb x) in
-                               write cell (just res)}
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
 
 prepStop : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
 prepStop cb = {s -> case (s)
@@ -93,28 +103,29 @@ apply cbId threadId callback thread =
 ----------------------------
 -- Handler
 
-hdl : {Callbacks [Console, Promise [Console], RefState]
-    -> Maybe (Pair (Pid R) {R -> [Console, Promise [Console], RefState, Yield] Unit})
+hdl : {Callbacks [Console, Promise [Console], RefState, Yield]
+    -- -> <Promise[Console], Yield> Unit -- thread
+    -- -> <Promise[Console], Yield> Unit -- controller
     -> <Promise[Console], Yield> Unit -- thread
     -> <Promise[Console], Yield> Unit -- controller
     -> [Console, RefState] Unit}
 
 ----- Installing Promises
-hdl cbs res <promise (stopCb cb) -> th1> <control> =
+hdl cbs <promise (stopCb cb) -> th1> <control> =
     print "stop installed\n";
-    let cell = pid (new nothing) in
+    let cell = pid (new empty) in
     let cbMod = (prepStop (to_write cell cb)) in
-    hdl  (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) res (th1 cell) control!
+    hdl  (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (th1 cell) control!
 
 
------ Executing promises based on signals.
-hdl cbs nothing <th1> <signal sig -> control> =
+-- ----- Executing promises based on signals.
+hdl cbs <th1> <signal sig -> control> =
     -- Look to see if there's any matching promises waiting.
     case (peek sig cbs)
     -- If there isn't, do nothing and carry on.
-      { nothing -> hdl cbs nothing th1! (control unit)
-      | (just (pair id cb)) -> hdl (pop sig cbs) nothing
-                                   (<Yield>(cb sig); th1!)
+      { nothing -> hdl cbs th1! (control unit)
+      | (just (pair id cb)) -> hdl (pop sig cbs)
+                                   ((cb sig); th1!)
                                    (control unit)}
                                    -- (<Yield>(apply id 0 {cb sig} th1)!)
                                    -- ((apply id 0 {(cb sig)} (<Yield> (th1!)))!)
@@ -122,29 +133,25 @@ hdl cbs nothing <th1> <signal sig -> control> =
                                    -- unit}
                                    -- ((apply id 1 {cb sig} {control unit})!)}
 
--- hdl cbs (just (pair cell resumption)) unit <signal sig -> control> =
---     case (peek sig cbs)
---       { nothing -> hdl cbs (just (pair cell resumption)) unit (control unit)
---       -- Keep simple for now; we know that the callback will be the one that the
---       -- thread is awaiting.
---       | (just (pair id cb)) -> hdl (pop sig cbs) nothing
---                                -- (cb unit; resumption (readPid cell))
---                                (<Yield>(cb sig); resumption (readPid cell))
---                                (control unit)}
+hdl cbs <await cell -> client> <server> =
+    case (readPid cell)
+         { (done x) -> hdl cbs (client x) server!
+         | empty -> writePid cell (addRes ((client)));
+                    hdl cbs unit server!}
+                   
 
 
+hdl cbs <yield -> th1> <control> =
+    hdl cbs (th1 unit) control!
 
+hdl cbs <th1> <yield -> control>  =
+    hdl cbs th1! (control unit)
 
-hdl cbs res <yield -> th1> <control> =
-    hdl cbs res (th1 unit) control!
-
-hdl cbs res <th1> <yield -> control>  =
-    hdl cbs res th1! (control unit)
-
-hdl _ _ unit _ = print "thread1 exits"
-hdl _ _ _ unit = print "controller exits"
+hdl _ unit _ = print "thread1 exits"
+hdl _ _ unit = print "controller exits"
 
 main : {[Console, RefState]Unit}
--- main! = hdl (callbacks mnil) nothing (thread1!) (<RefState>(controller!))
-main! = hdl (callbacks mnil) nothing (thread1!) ((controller!))
+-- -- main! = hdl (callbacks mnil) nothing (thread1!) (<RefState>(controller!))
+main! = hdl (callbacks mnil) (thread1!) ((controller!))
+-- main! = hdl (callbacks mnil) (unit) ((controller!))
 -- main! = hdl (callbacks mnil) nothing (unit) ((unit))
