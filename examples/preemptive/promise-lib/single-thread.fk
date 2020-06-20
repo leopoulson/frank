@@ -11,9 +11,9 @@ interface Yield = yield : Unit
 -- Promise structures.
 
 interface Promise =
-          promise R : Prom R [Promise, RefState, Yield] -> Pid R [Promise, RefState, Yield]
+          promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
         | signal : Sig -> Unit
-        | await R : Pid R [Promise, RefState, Yield]-> R
+        | await R : Pid R [Promise, RefState]-> R
 
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
@@ -51,7 +51,7 @@ counter x = ouint x; print " ";
             counter (x + 1)
 
 -- Install an interrupt handler for stopping.
-waitForStop : {[Console, Promise[Console], RefState, Yield]Unit}
+waitForStop : {[Console, Promise[Console, Yield], RefState, Yield]Unit}
 waitForStop! =
     promise (stopCb { _ ->
                        -- When we receive stop, we stop; so we install go and
@@ -68,10 +68,10 @@ sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
-thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
+thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread1! = print "starting"; waitForStop!; counter 0
 
-controller : {[Promise [Console], Console, RefState, Yield] Unit}
+controller : {[Promise [Console, Yield], Console, RefState, Yield] Unit}
 controller! = print "\n*- Stop\n"; signal (stopSig unit);
               sleepAndYield 400000;
               print "\n*- Go\n"; signal (goSig unit);
@@ -105,9 +105,9 @@ apply cbId threadId callback thread =
 ----------------------------
 -- Handler
 
-hdl : {Callbacks [Console, Promise [Console], RefState, Yield]
-    -> <Promise[Console], Yield> Unit -- thread
-    -> <Promise[Console], Yield> Unit -- controller
+hdl : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
+    -> <Promise[Console, Yield], Yield> Unit -- thread
+    -> <Promise[Console, Yield], Yield> Unit -- controller
     -> [Console, RefState] Unit}
 
 ----- Installing Promises
