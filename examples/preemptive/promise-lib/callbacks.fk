@@ -1,33 +1,54 @@
------- map stuff
-data Map K V = mentry K V (Map K V) | mnil
+----- Callbacks stuff
 
-lookup : {{K -> K -> Bool} -> K -> Map K V -> Maybe V}
-lookup _ _ mnil = nothing
-lookup eq k (mentry k' v rest) = if (eq k k') {just v} {lookup eq k rest}
+-- This makes use of the fact that Frank just appends includees to the end of
+-- the includer, so it leaves `eqSig` to be defined in the includer file.
 
-lookupHard : {{K -> K -> Bool} -> K -> Map K V -> V}
--- lookupHard _ _ (mnil) = nothing
-lookupHard eq k (mentry k' v rest) = if (eq k k') {v} {lookupHard eq k rest}
-
-delete : {{K -> K -> Bool} -> K -> Map K V -> Map K V}
-delete _ _ mnil = mnil
-delete eq k (mentry k' v rest) = if (eq k k') {delete eq k rest} {mentry k' v (delete eq k rest)}
-
-insert : K -> V -> Map K V -> Map K V
-insert key value m = mentry key value m
+data Callbacks [E] = cbentry Sig (List (Pair Int {Sig -> [E|]Unit})) (Callbacks [E|])
+                   | cbnil
 
 
+-- More specific functions to our needs.
+snocOrInsert : {Sig -> Pair Int {Sig -> [E|] Unit} -> Callbacks [E|] -> Callbacks [E|]}
+snocOrInsert sig x cbnil = (cbentry sig [x] cbnil)
+snocOrInsert sig x (cbentry sig' xs rest) =
+    if (eqSig sig sig')
+      { cbentry sig' (snoc xs x) rest }
+      { cbentry sig' xs (snocOrInsert sig x rest) }
 
-modify : {K -> K -> Bool}    -- equality
-      -> {V -> V}            -- modifying function
-      -> K                   -- index
-      -> Map K V             -- init map
-      -> Map K V             -- resulting map
-modify _ _ _ mnil = mnil
-modify eq mdfy k (mentry k' v rest) = if (eq k k')
-       { mentry k' (mdfy v) (modify eq mdfy k rest) }
-       { mentry k' v        (modify eq mdfy k rest) }
------- end map stuff
 
-eqn : {Int -> Int -> Bool}
-eqn x y = x == y
+peek : {Sig -> Callbacks [E|] -> Maybe (Pair Int {Sig -> [E|]Unit})}
+peek _   cbnil = nothing
+peek sig (cbentry sig' xs rest) =
+    if (eqSig sig sig')
+       { case (xs)
+         { nil -> nothing
+         | (cb :: cbs) -> just cb }}
+       { peek sig rest }
+
+tail : {List X -> List X}
+tail nil = nil
+tail (x::xs) = xs
+
+pop : {Sig -> Callbacks [E|] -> Callbacks [E|]}
+pop _ cbnil = cbnil
+pop sig (cbentry sig' xs rest) =
+    if (eqSig sig sig')
+       { cbentry sig' (tail xs) rest }
+       { cbentry sig' xs (pop sig rest) }
+
+-- Generic map-based stuff
+lookup : {Sig -> Callbacks [E|] -> Maybe (List (Pair Int {Sig -> [E|] Unit}))}
+lookup _ cbnil = nothing
+lookup sig (cbentry sig' v rest) = if (eqSig sig sig') {just v} {lookup sig rest}
+
+lookupHard : {Sig -> Callbacks [E|] -> List (Pair Int {Sig -> [E|] Unit})}
+-- lookupHard _ _ (cbnil) = nothing
+lookupHard sig (cbentry sig' v rest) = if (eqSig sig sig') {v} {lookupHard sig rest}
+
+delete : {Sig -> Callbacks [E|] -> Callbacks [E|]}
+delete _ cbnil = cbnil
+delete sig (cbentry sig' v rest) = if (eqSig sig sig') {delete sig rest} {cbentry sig' v (delete sig rest)}
+
+insert : Sig -> List (Pair Int {Sig -> [E|]Unit}) -> Callbacks [E|] -> Callbacks [E|]
+insert key value m = cbentry key value m
+

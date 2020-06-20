@@ -1,8 +1,6 @@
 include std
 
-include map
-
-include helpers_cb
+include callbacks
 
 -- Yielding needed for pre-emption to work.
 interface Yield = yield : Unit
@@ -18,7 +16,7 @@ interface Promise =
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
 
-data Callbacks [E] = callbacks (Map Sig (List (Pair Int {Sig -> [E|]Unit})))
+-- data Callbacks [E] = callbacks (Map Sig (List (Pair Int {Sig -> [E|]Unit})))
 
 data Sig = goSig Unit | stopSig Unit
 
@@ -153,4 +151,4 @@ hdl _ unit _ = print "thread1 exits"
 hdl _ _ unit = print "controller exits"
 
 main : {[Console, RefState]Unit}
-main! = hdl (callbacks mnil) thread1! controller!
+main! = hdl cbnil thread1! controller!
