@@ -128,7 +128,6 @@ hdl cbs <promise (opIntCb cb) -> client> <server> =
 -- -- same for strings
 hdl cbs <promise (opStrCb cb) -> client> <server> =
     let cell = pid (new empty) in
-    -- look at how they massacred my boy!
     let cbMod = prep_str (to_write cell cb) in
     hdl (snocOrInsert (opStrSig "") cbMod cbs) (client cell) server!
 

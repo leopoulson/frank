@@ -15,8 +15,9 @@ interface Promise =
 
 data Prom R [E] = goCb {Int -> [E|] R}
                 | stopCb {Int -> [E|] R}
+                | resetCb {Unit -> [E|] R}
 
-data Sig = goSig Int | stopSig Int
+data Sig = goSig Int | stopSig Int | resetSig Unit
 
 eqSig : {Sig -> Sig -> Bool}
 eqSig (goSig _) (goSig _) = true
@@ -40,11 +41,19 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
-counter1 : {Int -> [Console, Yield]Unit}
-counter1 x = ouint x; print " ";
-            sleep 200000;
-            yield!;
-            counter1 (x + 1)
+counter1 : {Ref Bool -> Ref Int -> [Console, Yield, RefState, Promise[Console, Yield]]Unit}
+counter1 reqInProg x = ouint (read x); print " ";
+             sleep 200000;
+             yield!;
+             -- If this is left unhandled we don't get a warning message.
+             if (not (read reqInProg))
+                { write reqInProg true;
+                  promise (resetCb { _ -> write x 0;
+                                       write reqInProg false }); unit
+                }
+                { unit };
+             write x ((read x) + 1);
+             counter1 reqInProg x
 
 -- 'counts' through characters
 counter2 : {Int -> [Console, Yield]Unit}
@@ -80,7 +89,7 @@ waitForGoGuarded arity =
 
 -- Install an interrupt handler for stopping.
 thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
-thread1! = waitForStopGuarded 0; counter1 0
+thread1! = waitForStopGuarded 0; counter1 (new false) (new 0)
 
 thread2 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread2! = waitForGoGuarded 1; counter2 0

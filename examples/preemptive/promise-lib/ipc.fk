@@ -15,14 +15,15 @@ interface Promise =
 
 data Prom R [E] = goCb {Int -> [E|] R}
                 | stopCb {Int -> [E|] R}
+                | resetCb {Unit -> [E|] R}
 
-data Sig = goSig Int | stopSig Int
+data Sig = goSig Int | stopSig Int | resetSig Unit
 
 eqSig : {Sig -> Sig -> Bool}
 eqSig (goSig _) (goSig _) = true
 eqSig (stopSig _) (stopSig _) = true
+eqSig (resetSig _) (resetSig _) = true
 eqSig _ _ = false
-
 
 ----------------------------
 -- Pids
@@ -40,17 +41,26 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
-counter1 : {Int -> [Console, Yield]Unit}
-counter1 x = ouint x; print " ";
-            sleep 200000;
-            yield!;
-            counter1 (x + 1)
+counter1 : {Ref Bool -> Ref Int -> [Console, Yield, RefState, Promise[Console, Yield]]Unit}
+counter1 reqInProg x = ouint (read x); print " ";
+             sleep 200000;
+             yield!;
+             -- If this is left unhandled we don't get a warning message.
+             if (not (read reqInProg))
+                { write reqInProg true;
+                  promise (resetCb { _ -> write x 0;
+                                       write reqInProg false }); unit
+                }
+                { unit };
+             write x ((read x) + 1);
+             counter1 reqInProg x
 
 -- 'counts' through characters
-counter2 : {Int -> [Console, Yield]Unit}
+counter2 : {Int -> [Console, Yield, Promise[Console, Yield], RefState]Unit}
 counter2 x = ouch (toc x); print " ";
              sleep 200000;
              yield!;
+             if (x > 10) { signal (resetSig unit) } { unit };
              counter2 (x + 1)
 
 
@@ -80,7 +90,7 @@ waitForGoGuarded arity =
 
 -- Install an interrupt handler for stopping.
 thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
-thread1! = waitForStopGuarded 0; counter1 0
+thread1! = waitForStopGuarded 0; counter1 (new false) (new 0)
 
 thread2 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread2! = waitForGoGuarded 1; counter2 0
@@ -118,6 +128,11 @@ prepGo cb = {s -> case (s)
                    { (goSig x) -> cb x
                    | _ -> unit}}
 
+prepReset : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepReset cb = {s -> case (s)
+                   { (resetSig x) -> cb x
+                   | _ -> unit}}
+
 apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
 apply cbId threadId callback thread =
     if (cbId == threadId)
@@ -132,10 +147,6 @@ apply2 threadId arg (pair cbId callback) rest =
 
 applyMany : {Int -> Sig -> {[E|] R} -> List (Pair Int {Sig -> [E|] Unit}) -> {[E|] R}}
 applyMany threadId arg rest cbs = fold {x y -> apply2 threadId arg x y} rest cbs
-
--- guard takes a condition and an interrupt handler.
--- it recursively reinstalls itself until the condition is true
--- Not sure if this is OK?
 
 ----------------------------
 -- Handler
@@ -172,6 +183,11 @@ hdl cbs <promise (goCb cb) -> th1> <th2> <control> =
     let cbMod = prepGo (to_write cell cb) in
     hdl (snocOrInsert (goSig 0) (pair 0 cbMod) cbs) (th1 cell) th2! control!
 
+hdl cbs <promise (resetCb cb) -> th1> <th2> <control> =
+    let cell = pid (new empty) in
+    let cbMod = prepReset (to_write cell cb) in
+    hdl (snocOrInsert (resetSig unit) (pair 0 cbMod) cbs) (th1 cell) th2! control!
+
 hdl cbs <th1> <promise (stopCb cb) -> th2>  <control> =
     let cell = pid (new empty) in
     let cbMod = prepStop (to_write cell cb) in
@@ -190,6 +206,12 @@ hdl cbs <th1> <th2> <signal sig -> control> =
         ((applyMany 1 sig th2 cbsHere)!)
         (control unit)
 
+hdl cbs <th1> <signal sig -> th2> <control> =
+    let cbsHere = lookupHard sig cbs in
+    hdl (clear sig cbs)
+        ((applyMany 0 sig th1 cbsHere)!)
+        (th2 unit)
+        ((applyMany 2 sig control cbsHere)!)
 
 hdl cbs <yield -> th1> <th2> <yield -> control> =
     hdl cbs (th1 unit) th2! (control unit)
