@@ -36,6 +36,11 @@ pop sig (cbentry sig' xs rest) =
        { cbentry sig' (tail xs) rest }
        { cbentry sig' xs (pop sig rest) }
 
+clear : {Sig -> Callbacks [E|] -> Callbacks [E|]}
+clear sig cbnil = cbnil
+clear sig (cbentry sig' xs rest) =
+      cbentry sig' (if (eqSig sig sig') {[]} {xs}) (clear sig rest)
+
 -- Generic map-based stuff
 lookup : {Sig -> Callbacks [E|] -> Maybe (List (Pair Int {Sig -> [E|] Unit}))}
 lookup _ cbnil = nothing

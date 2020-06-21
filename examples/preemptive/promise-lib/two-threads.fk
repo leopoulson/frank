@@ -1,0 +1,215 @@
+include std
+
+include callbacks
+
+-- Yielding needed for pre-emption to work.
+interface Yield = yield : Unit
+
+----------------------------
+-- Promise structures.
+
+interface Promise =
+          promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
+        | signal : Sig -> Unit
+        | await R : Pid R [Promise, RefState]-> R
+
+-- Even though the signal for stop & go is an Int, we can write the callbacks as
+-- taking unit. This is because we preprocess them anyway
+data Prom R [E] = goCb {Int -> [E|] R}
+                | stopCb {Int -> [E|] R}
+
+data Sig = goSig Int | stopSig Int
+
+eqSig : {Sig -> Sig -> Bool}
+eqSig (goSig _) (goSig _) = true
+eqSig (stopSig _) (stopSig _) = true
+eqSig _ _ = false
+
+
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = empty | done X | addRes {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+counter1 : {Int -> [Console, Yield]Unit}
+counter1 x = ouint x; print " ";
+            sleep 200000;
+            yield!;
+            counter1 (x + 1)
+
+-- 'counts' through characters
+counter2 : {Int -> [Console, Yield]Unit}
+counter2 x = ouch (toc x); print " ";
+             sleep 200000;
+             yield!;
+             counter2 (x + 1)
+
+
+goGuarded : {Int -> [Promise[Console, Yield], Console, RefState, Yield] Pid Unit [Console, Yield, Promise[Console, Yield], RefState]}
+goGuarded arity =
+    promise (goCb { x -> if ((mod x 2) == arity)
+                       { unit }
+                       -- Slightly hacky; if we need to reinstall a
+                       -- blocked promise we have to await it when we
+                       -- call it again.
+                       -- This could lead to a very large buildup of awaited thunks?
+                       { let goPromise = (goGuarded arity) in await (goPromise)}})
+
+waitForStopGuarded : {Int -> [Console, Promise[Console, Yield], RefState, Yield]Unit}
+waitForStopGuarded arity =
+    promise (stopCb { x -> if ((mod x 2) == arity)
+                          { let goPromise = (goGuarded arity) in
+                            await goPromise;
+                            waitForStopGuarded arity }
+                          { waitForStopGuarded arity }})
+    ; unit
+
+waitForGoGuarded : {Int -> [Console, Promise[Console, Yield], RefState, Yield]Unit}
+waitForGoGuarded arity =
+    goGuarded arity;
+    waitForStopGuarded arity
+
+-- Install an interrupt handler for stopping.
+thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
+thread1! = waitForStopGuarded 0; counter1 0
+
+thread2 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
+thread2! = waitForGoGuarded 1; counter2 0
+
+-- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+-- Controller just sends signals and breaks.
+controller : {Int -> [Promise [Console, Yield], Console, RefState, Yield] Unit}
+controller k = print "\n*- Stop "; ouint k; print "\n";
+               signal (stopSig k);
+               print "*- Go "; ouint (k + 1); print "\n";
+               signal (goSig (k + 1));
+               sleepAndYield 400000;
+               controller (k + 1)
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepStop : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepStop cb = {s -> case (s)
+                   { (stopSig x) -> cb x
+                   | _ -> unit}}
+
+prepGo : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepGo cb = {s -> case (s)
+                   { (goSig x) -> cb x
+                   | _ -> unit}}
+
+apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
+apply cbId threadId callback thread =
+    if (cbId == threadId)
+     {{callback!; thread!}}
+     {thread}
+
+apply2 : {Int -> Sig -> Pair Int {Sig -> [E|] Unit} -> {[E|] R} -> {[E|] R}}
+apply2 threadId arg (pair cbId callback) rest =
+    if (cbId == threadId)
+       { {callback arg; rest!} }
+       { rest }
+
+applyMany : {Int -> Sig -> {[E|] R} -> List (Pair Int {Sig -> [E|] Unit}) -> {[E|] R}}
+applyMany threadId arg rest cbs = fold {x y -> apply2 threadId arg x y} rest cbs
+
+-- guard takes a condition and an interrupt handler.
+-- it recursively reinstalls itself until the condition is true
+-- Not sure if this is OK?
+
+----------------------------
+-- Handler
+
+hdl : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
+    -> <Promise[Console, Yield], Yield> Unit -- thread one
+    -> <Promise[Console, Yield], Yield> Unit -- thread two
+    -> <Promise[Console, Yield], Yield> Unit -- controller
+    -> [Console, RefState] Unit}
+
+----- Installing Promises
+hdl cbs <promise (stopCb cb) -> th1> <th2> <control> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = prepStop (to_write cell cb) in
+    -- Add to list and resume.
+    hdl (snocOrInsert (stopSig 0) (pair 0 cbMod) cbs) (th1 cell) th2! control!
+
+hdl cbs <promise (goCb cb) -> th1> <th2> <control> =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    hdl (snocOrInsert (goSig 0) (pair 0 cbMod) cbs) (th1 cell) th2! control!
+
+hdl cbs <th1> <promise (stopCb cb) -> th2>  <control> =
+    let cell = pid (new empty) in
+    let cbMod = prepStop (to_write cell cb) in
+    hdl (snocOrInsert (stopSig 0) (pair 1 cbMod) cbs) th1! (th2 cell) control!
+
+hdl cbs <th1> <promise (goCb cb) -> th2>  <control> =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    hdl (snocOrInsert (goSig 0) (pair 1 cbMod) cbs) th1! (th2 cell) control!
+
+----- Executing promises based on signals.
+hdl cbs <th1> <th2> <signal sig -> control> =
+    let cbsHere = lookupHard sig cbs in
+    hdl (clear sig cbs)
+        ((applyMany 0 sig th1 cbsHere)!)
+        ((applyMany 1 sig th2 cbsHere)!)
+        (control unit)
+
+hdl cbs <await cell -> th1> <th2> <server> =
+    case (readPid cell)
+         { (done x) -> hdl cbs (th1 x) th2! server!
+         | empty -> writePid cell (addRes th1);
+                    hdl cbs unit th2! server!}
+
+hdl cbs <th1> <await cell -> th2>  <server> =
+    case (readPid cell)
+         { (done x) -> hdl cbs th1! (th2 x) server!
+         | empty -> writePid cell (addRes th2);
+                    hdl cbs th1! unit server!}
+                   
+hdl cbs <yield -> th1> <th2> <yield -> control> =
+    hdl cbs (th1 unit) th2! (control unit)
+
+hdl cbs <th1> <yield -> th2> <yield -> control> =
+    hdl cbs th1! (th2 unit) (control unit)
+
+hdl cbs <yield -> th1> <th2> <control> =
+    hdl cbs (th1 unit) th2! control!
+
+hdl cbs <th1> <yield -> th2> <control> =
+    hdl cbs th1! (th2 unit) control!
+
+hdl cbs <th1> <th2> <yield -> control> =
+    hdl cbs th1! th2! (control unit)
+
+hdl _ unit _ _ = print "thread1 exits"
+hdl _ _ unit _ = print "thread2 exits"
+hdl _ _ _ unit = print "controller exits"
+
+main : {[Console, RefState]Unit}
+main! = hdl cbnil thread1! thread2! (controller 0)
