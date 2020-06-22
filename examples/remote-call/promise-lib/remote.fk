@@ -1,0 +1,180 @@
+include std
+
+include callbacks_op
+
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = empty | done X | addRes {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Promise structures.
+
+interface Promise =
+          promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
+        | signal : Sig -> Unit
+        | await R : Pid R [Promise, RefState]-> R
+
+data Op = call | result | cancel
+
+data Prom R [E] = intCb Op {Int -> [E|] R}
+                | pairCb Op {Pair String Int -> [E|] R}
+
+data Sig = intSig Op Int
+         | pairSig Op (Pair String Int)
+
+eqOp : {Op -> Op -> Bool}
+eqOp call call = true
+eqOp result result = true
+eqOp cancel cancel = true
+eqOp _ _ = false
+
+getOp : {Sig -> Op}
+getOp (intSig op _) = op
+getOp (pairSig op _) = op
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepInt : {Op -> {Int -> [E|]Unit} -> {Sig -> [E|] Unit}}
+prepInt op cb = {s -> case (s)
+                     { (intSig op x) -> cb x
+                     | _ -> unit}}
+
+prepPair : {Op -> {Pair String Int -> [E|]Unit} -> {Sig -> [E|] Unit}}
+prepPair op cb = {s -> case (s)
+                     { (pairSig op x) -> cb x
+                     | _ -> unit}}
+
+apply : {Int -> Sig -> Pair Int {Sig -> [E|] Unit} -> {[E|] R} -> {[E|] R}}
+apply threadId arg (pair cbId callback) rest =
+    if (cbId == threadId)
+       { {callback arg; rest!} }
+       { rest }
+
+applyMany : {Int -> Sig -> {[E|] R} -> List (Pair Int {Sig -> [E|] Unit}) -> {[E|] R}}
+applyMany threadId arg rest cbs = fold {x y -> apply threadId arg x y} rest cbs
+
+----------------------------
+-- Threads
+
+resultWaiter : {Int -> [Promise, RefState] Pid String [Promise, RefState]}
+resultWaiter callNo =
+    promise (pairCb result
+      {(pair res callNo') ->
+          -- If the call numbers match,
+          if (callNo == callNo')
+          -- Just return the value
+          { res }
+          -- Else reinstall the promise and return the value of this.
+          { await (resultWaiter callNo) }})
+
+-- Creates a request for the arguments to be evaluated.
+-- Returns a thunk that, when executed, awaits the promise.
+callWith : {String -> Ref Int -> [Promise , RefState]{[Promise, RefState]String}}
+callWith arg counter =
+     let callNo = read counter in
+     -- Request that a call is made.
+     signal (pairSig call (pair arg callNo));
+     -- Increment call counter
+     write counter (callNo + 1);
+     -- Install the result promise.
+     let resultPromise = resultWaiter callNo in
+     -- Return thunked process of awaiting the result.
+     { await resultPromise }
+
+-- This is the remote web request
+remoteRequest : {String -> [Web]String}
+remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
+
+remote : {[Promise[Web, Console], RefState, Web, Console] Unit}
+remote! =
+    promise (pairCb call
+      {(pair arg callNo) ->
+        -- When a call signal comes in, just perform the request and send the
+        -- result back
+        let res = remoteRequest arg in
+        signal (pairSig result (pair res callNo));
+        remote!})
+    ; unit
+
+-- This isn't good - we *have* to put [Console] here otherwise it won't execute
+caller : {[Promise[Console, Web], Console, RefState, Web] Unit}
+caller! = let counter = new 0 in
+          let one = callWith "10" counter in
+          let oneres = one! in
+          print "10 * 10 = "; print oneres; print "\n";
+          let two = callWith oneres counter in
+          let twores = two! in
+          print "10 * 100 = "; print twores; print "\n";
+          let three = callWith twores counter in
+          print "10 * 1000 = "; print three!; print "\n"
+
+----------------------------
+-- Handler
+
+hdl : {Callbacks [Console, Web, Promise [Web, Console], RefState]
+    -> <Promise[Console, Web]> Unit -- thread one
+    -> <Promise[Console, Web]> Unit -- thread two
+    -> [Console, RefState, Web] Unit}
+
+----- Awaiting Promises
+hdl cbs <await cell -> th1> <th2>  =
+    case (readPid cell)
+         { (done x) -> hdl cbs (th1 x) th2!
+         | empty -> writePid cell (addRes th1);
+                    hdl cbs unit th2!}
+
+hdl cbs <th1> <await cell -> th2> =
+    case (readPid cell)
+         { (done x) -> hdl cbs th1! (th2 x)
+         | empty -> writePid cell (addRes th2);
+                    hdl cbs th1! unit }
+
+----- Installing Promises
+hdl cbs <promise (pairCb op cb) -> th1> <th2> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Convert callback to 'generic' form
+    let cbMod = prepPair op (to_write cell cb) in
+    -- Add to callbacks and carry on.
+    hdl (snocOrInsert op (pair 0 cbMod) cbs) (th1 cell) th2!
+
+hdl cbs <th1> <promise (pairCb op cb) -> th2> =
+    let cell = pid (new empty) in
+    let cbMod = prepPair op (to_write cell cb) in
+    hdl (snocOrInsert op (pair 1 cbMod) cbs) th1! (th2 cell)
+
+----- Executing promises based on signals.
+hdl cbs <signal sig -> th1> <th2> =
+    let op = getOp sig in
+    let cbsHere = lookupHard op cbs in
+    hdl (clear op cbs)
+        (th1 unit)
+        ((applyMany 1 sig th2 cbsHere)!)
+
+hdl cbs <th1> <signal sig -> th2> =
+    let op = getOp sig in
+    let cbsHere = lookupHard op cbs in
+    hdl (clear op cbs)
+        ((applyMany 0 sig th1 cbsHere)!)
+        (th2 unit)
+
+hdl _ unit _ = print "thread1 exits\n"
+hdl _ _ unit = print "thread2 exits\n"
+
+main : {[Console, RefState, Web]Unit}
+main! = hdl cbnil remote! caller!

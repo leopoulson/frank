@@ -1,0 +1,59 @@
+----- Callbacks stuff
+
+-- This makes use of the fact that Frank just appends includees to the end of
+-- the includer, so it leaves `eqSig` to be defined in the includer file.
+
+data Callbacks [E] = cbentry Op (List (Pair Int {Sig -> [E|]Unit})) (Callbacks [E|])
+                   | cbnil
+
+
+-- More specific functions to our needs.
+snocOrInsert : {Op -> Pair Int {Sig -> [E|] Unit} -> Callbacks [E|] -> Callbacks [E|]}
+snocOrInsert op x cbnil = (cbentry op [x] cbnil)
+snocOrInsert op x (cbentry op' xs rest) =
+    if (eqOp op op')
+      { cbentry op' (snoc xs x) rest }
+      { cbentry op' xs (snocOrInsert op x rest) }
+
+
+peek : {Op -> Callbacks [E|] -> Maybe (Pair Int {Sig -> [E|]Unit})}
+peek _   cbnil = nothing
+peek op (cbentry op' xs rest) =
+    if (eqOp op op')
+       { case (xs)
+         { nil -> nothing
+         | (cb :: cbs) -> just cb }}
+       { peek op rest }
+
+tail : {List X -> List X}
+tail nil = nil
+tail (x::xs) = xs
+
+pop : {Op -> Callbacks [E|] -> Callbacks [E|]}
+pop _ cbnil = cbnil
+pop op (cbentry op' xs rest) =
+    if (eqOp op op')
+       { cbentry op' (tail xs) rest }
+       { cbentry op' xs (pop op rest) }
+
+clear : {Op -> Callbacks [E|] -> Callbacks [E|]}
+clear op cbnil = cbnil
+clear op (cbentry op' xs rest) =
+      cbentry op' (if (eqOp op op') {[]} {xs}) (clear op rest)
+
+-- Generic map-based stuff
+lookup : {Op -> Callbacks [E|] -> Maybe (List (Pair Int {Sig -> [E|] Unit}))}
+lookup _ cbnil = nothing
+lookup op (cbentry op' v rest) = if (eqOp op op') {just v} {lookup op rest}
+
+lookupHard : {Op -> Callbacks [E|] -> List (Pair Int {Sig -> [E|] Unit})}
+-- lookupHard _ _ (cbnil) = nothing
+lookupHard op (cbentry op' v rest) = if (eqOp op op') {v} {lookupHard op rest}
+
+delete : {Op -> Callbacks [E|] -> Callbacks [E|]}
+delete _ cbnil = cbnil
+delete op (cbentry op' v rest) = if (eqOp op op') {delete op rest} {cbentry op' v (delete op rest)}
+
+insert : Op -> List (Pair Int {Sig -> [E|]Unit}) -> Callbacks [E|] -> Callbacks [E|]
+insert key value m = cbentry key value m
+

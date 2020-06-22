@@ -18,8 +18,10 @@ data Op = go | stop | reset
 data Prom R [E] = intCb Op {Int -> [E|] R}
                 | unitCb Op {Unit -> [E|] R}
 
-data Sig = intSig Op Int
-         | unitSig Op
+-- data Sig = intSig Op Int
+--          | unitSig Op
+
+data Sig = sig Op S
 
 eqOp : {Op -> Op -> Bool}
 eqOp go go = true
@@ -169,7 +171,7 @@ hdl cbs <await cell -> th1> <th2> <server> =
          | empty -> writePid cell (addRes th1);
                     hdl cbs unit th2! server!}
 
-hdl cbs <th1> <await cell -> th2>  <server> =
+hdl cbs <th1> <await cell -> th2> <server> =
     case (readPid cell)
          { (done x) -> hdl cbs th1! (th2 x) server!
          | empty -> writePid cell (addRes th2);
