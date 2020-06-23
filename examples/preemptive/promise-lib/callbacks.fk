@@ -7,6 +7,8 @@ data Callbacks [E] = cbentry Sig (List (Pair Int {Sig -> [E|]Unit})) (Callbacks 
                    | cbnil
 
 
+
+
 -- More specific functions to our needs.
 snocOrInsert : {Sig -> Pair Int {Sig -> [E|] Unit} -> Callbacks [E|] -> Callbacks [E|]}
 snocOrInsert sig x cbnil = (cbentry sig [x] cbnil)

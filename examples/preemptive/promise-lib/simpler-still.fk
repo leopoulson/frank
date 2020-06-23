@@ -1,0 +1,41 @@
+include std
+
+-- Yielding needed for pre-emption to work.
+interface Yield = yield : Unit
+
+counter : {Int -> [Console, Yield]Unit}
+counter x = ouint x; print " ";
+            sleep 200000;
+            yield!;
+            counter (x + 1)
+
+counter2 : {Int -> [Console, Yield]Unit}
+counter2 x = ouch (toc x); print " ";
+             sleep 200000;
+             yield!;
+             counter2 (x + 1)
+
+-- Simple threads that just print and yield.
+simple1 : {[Console, Yield]Unit}
+simple1! = counter 0
+
+simple2 : {[Console, Yield]Unit}
+simple2! = counter2 0
+
+-- Handling yield messages.
+betterControl : {<Yield> Unit -> <Yield> Unit -> Unit}
+betterControl <yield -> m> <yield -> n> = betterControl (m unit) (n unit)
+betterControl <yield -> m> <n> = betterControl n! (m unit)
+betterControl <m> <yield -> n> = betterControl (n unit) m!
+
+betterControl unit <m> = stupidYield m!
+betterControl <m> unit = stupidYield m!
+
+-- If we run stupidYield on the composition of the two, we never get anywhere; the two never let the other run.
+stupidYield : {<Yield>Unit -> Unit}
+stupidYield <yield -> k> = stupidYield (k unit)
+stupidYield unit = unit
+
+main : {[Console, RefState]Unit}
+-- main! = hdlSgl cbnil (betterControl thread1! controller!)
+main! = betterControl simple1! simple2!

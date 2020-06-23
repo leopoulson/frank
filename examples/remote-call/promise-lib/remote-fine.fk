@@ -177,8 +177,7 @@ hdl cbs <signal sig -> th1> =
     let op = getOp sig in
     let cbsHere = lookup op cbs in
     case (cbsHere)
-      { nothing ->
-                   hdl (clear op cbs) (th1 unit)
+      { nothing -> hdl (clear op cbs) (th1 unit)
       | (just cbsHere') -> hdl (clear op cbs)
                                ((applyMany2 0 sig cbsHere')!; th1 unit) }
 

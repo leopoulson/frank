@@ -49,7 +49,7 @@ counter x = ouint x; print " ";
             counter (x + 1)
 
 -- Install an interrupt handler for stopping.
-waitForStop : {[Console, Promise[Console, Yield], RefState, Yield]Unit}
+waitForStop : {[Console, Promise[Console], RefState]Unit}
 waitForStop! =
     promise (stopCb { _ ->
                        -- When we receive stop, we stop; so we install go and
@@ -66,10 +66,10 @@ sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
-thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
-thread1! = print "starting"; waitForStop!; counter 0
+thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
+thread1! = print "starting"; <Yield>(waitForStop!); (counter 0)
 
-controller : {[Promise [Console, Yield], Console, RefState, Yield] Unit}
+controller : {[Promise [Console], Console, RefState, Yield] Unit}
 controller! = print "\n*- Stop\n"; signal (stopSig unit);
               sleepAndYield 400000;
               print "\n*- Go\n"; signal (goSig unit);
@@ -103,23 +103,54 @@ apply cbId threadId callback thread =
 ----------------------------
 -- Handler
 
-hdlSingle : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
-    -> <Promise[Console, Yield]> Unit -- thread
-    -> [Console, RefState] Unit}
+hdlSgl : {Callbacks [K| Promise [K|], RefState]
+    -> <Promise[K|]> Unit -- thread
+    -> [K| RefState] Unit}
 
-hdl : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
-    -> <Promise[Console, Yield], Yield> Unit -- thread
-    -> <Promise[Console, Yield], Yield> Unit -- controller
-    -> [Console, RefState] Unit}
+----- Installing Promises
+hdlSgl cbs <promise (stopCb cb) -> th1> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = (prepStop (to_write cell cb)) in
+    -- Add to list and resume.
+    hdlSgl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (th1 cell)
+    -- hdlSgl (cbs) (th1 cell) control!
+
+hdlSgl cbs <promise (goCb cb) -> th1> =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    hdlSgl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (th1 cell)
+
+----- Executing promises based on signals.
+hdlSgl cbs <signal sig -> th1> =
+    -- Look to see if there's any matching promises waiting.
+    case (peek sig cbs)
+    -- If there isn't, do nothing and carry on.
+      { nothing -> hdlSgl cbs (th1 unit)
+      | (just (pair id cb)) -> hdlSgl (pop sig cbs)
+                                   ((cb sig); (th1 unit))}
+
+hdlSgl cbs <await cell -> client> =
+    case (readPid cell)
+         { (done x) -> hdlSgl cbs (client x)
+         | empty -> writePid cell (addRes client);
+                    hdlSgl cbs unit}
+
+hdl : {Callbacks [K| Promise [K|], RefState]
+    -> <Promise[K|]> Unit -- thread
+    -> <Promise[K|]> Unit -- controller
+    -> [K| RefState] Unit}
 
 ----- Installing Promises
 hdl cbs <promise (stopCb cb) -> th1> <control> =
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to correct form
-    let cbMod = prepStop (to_write cell cb) in
+    let cbMod = (prepStop (to_write cell cb)) in
     -- Add to list and resume.
     hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (th1 cell) control!
+    -- hdl (cbs) (th1 cell) control!
 
 hdl cbs <promise (goCb cb) -> th1> <control> =
     let cell = pid (new empty) in
@@ -133,26 +164,26 @@ hdl cbs <th1> <signal sig -> control> =
     -- If there isn't, do nothing and carry on.
       { nothing -> hdl cbs th1! (control unit)
       | (just (pair id cb)) -> hdl (pop sig cbs)
-                                   (cb sig; th1!)
+                                   (<Yield>(cb sig); th1!)
                                    (control unit)}
 
 hdl cbs <await cell -> client> <server> =
     case (readPid cell)
-         { (done x) -> hdl cbs (client x) server!
+         { (done x) -> hdl cbs ((client x)) server!
          | empty -> writePid cell (addRes client);
                     hdl cbs unit server!}
                    
-hdl cbs <yield -> thr> <yield -> control> =
-    hdl cbs (thr unit) (control unit)
+-- hdl cbs <yield -> thr> <yield -> control> =
+--     hdl cbs (thr unit) (control unit)
 
-hdl cbs <yield -> th1> <control> =
-    hdl cbs (th1 unit) control!
+-- hdl cbs <yield -> th1> <control> =
+--     hdl cbs (th1 unit) control!
 
-hdl cbs <th1> <yield -> control> =
-    hdl cbs th1! (control unit)
+-- hdl cbs <th1> <yield -> control> =
+--     hdl cbs th1! (control unit)
 
-hdl _ unit _ = print "thread1 exits"
-hdl _ _ unit = print "controller exits"
+hdl _ unit _ = unit
+hdl _ _ unit = unit
 
 main : {[Console, RefState]Unit}
-main! = hdl cbnil thread1! controller!
+main! = hdlSgl cbnil (thread1!; controller!)
