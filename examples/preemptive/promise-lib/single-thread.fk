@@ -45,7 +45,7 @@ writePid (pid cell) x = write cell x
 counter : {Int -> [Console, Yield]Unit}
 counter x = ouint x; print " ";
             sleepAndYield 200000;
-            yield!;
+            -- yield!;
             counter (x + 1)
 
 -- Install an interrupt handler for stopping.
@@ -65,7 +65,7 @@ sleepAndYield : Int -> [Console, Yield]Unit
 sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000;
-                yield!;
+                -- yield!;
                 sleepAndYield (x - 100000) }
 
 thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}

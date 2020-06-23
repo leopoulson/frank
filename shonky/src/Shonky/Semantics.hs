@@ -3,6 +3,7 @@ module Shonky.Semantics where
 import Prelude hiding ((<>))
 
 import Control.Monad
+import Control.Monad.State.Lazy
 import Debug.Trace
 import System.IO
 import Data.Char
@@ -81,6 +82,8 @@ type Agenda = [Frame]
 type SkippedAgenda = [Frame]
 -- [Frame]: Skipped frames (most recently skipped frame is on top)
 
+type Count s = State Int s
+
 envToList :: Env -> [[Def Val]]
 envToList g = envToList' g []
   where envToList' Empty     a = a
@@ -110,21 +113,28 @@ fetch g y = go g where
 -- Given env `g` and framestack `ls`, compute expression.
 -- 1) Terminating exp: Feed value into top frame
 -- 2) Ongoing exp:     Create new frame
-compute :: Env -> Exp -> Agenda -> Comp
+compute :: Env -> Exp -> Agenda -> Count Comp
 compute g (EV x)       ls   = consume (fetch g x) ls                        -- 1) look-up value
 compute g (EA a)       ls   = consume (VA a) ls                             -- 1) feed atom
 compute g (EI n)       ls   = consume (VI n) ls                             -- 1) feed int
 compute g (ED f)       ls   = consume (VD f) ls                             -- 1) feed double
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
-compute g ((EA "yield" :$ [])) ls = trace "found it!" $
+compute g ((EA "yield" :$ [])) ls = -- trace "found it!" $
   compute g (EA "yield") (Fun g [] : ls)
 
 compute g (f :$ as)    ls   = compute g f (Fun g as : ls)                   -- 2) Application. Compute function. Save args for later.
 
 -- original
 compute g (e :! f)     ls   =
-  compute g e (Seq g f : ls)
+  do modify (+1);
+     now <- get;
+     -- trace ("st is " ++ show now ++ "\n") $
+      (if (now `mod` 2 == 0 && now /= 0)
+       then do put (-1);
+               -- trace "inserting" $
+                 compute g ((EA "yield" :$ []) :! (e :! f)) ls
+       else compute g e (Seq g f : ls))
 
 compute g (e :// f)    ls   = compute g e (Qes g f : ls)                    -- 2) Composition. Compute 1st exp.  save 2nd for later.
 compute g (EF hss pes) ls   = consume (VF g hss pes) ls                     -- 1) feed in function
@@ -133,7 +143,7 @@ compute g (EX ces)     ls   = combine g [] ces ls                           -- 2
 compute g (ER (cs, r) e) ls = compute g e (Adp (cs, r) : ls)                -- 2) add commands to be skipped in `ls`
 
 -- Take val `v` and top-frame from stack, apply it to `v` in
-consume :: Val -> Agenda -> Comp
+consume :: Val -> Agenda -> Count Comp
  -- Given: eval. head `v`,     non-eval. tail `d`.  Record `v` and compute tail `d`.
 consume v (Car g d    : ls) = compute g d (Cdr v : ls)
 
@@ -165,7 +175,7 @@ consume v (Def g dvs x des e : ls) = define g ((x := v) : dvs) des e (ls)
 consume v (Txt g cs ces      : ls) = combine g (revapp (txt v) cs) ces (ls)
  -- ignore addaptor when value is obtained
 consume v (Adp (cs, r)       : ls) = consume v ls
-consume v []                       = Ret v
+consume v []                       = pure $ Ret v
 
 -- A helper to simplify strings (list of characters)
 -- this allows regular list append [x|xs] to function like [|`x``xs`|] but
@@ -181,13 +191,13 @@ revapp xz ys = foldl (flip (:)) ys xz
 
 -- evaluate string of type [Either Char Exp]
 -- given: env, already computed reversed beginning, rest, frame stack
-combine :: Env -> [Char] -> [Either Char Exp] -> Agenda -> Comp
+combine :: Env -> [Char] -> [Either Char Exp] -> Agenda -> Count Comp
 combine g cs [] ls = consume (VX (reverse cs)) ls
 combine g cs (Left c  : ces) ls = combine g (c : cs) ces ls
 combine g cs (Right e : ces) ls = compute g e (Txt g cs ces : ls)
 
 -- (not used in Frank)
-define :: Env -> [Def Val] -> [Def Exp] -> Exp -> Agenda -> Comp
+define :: Env -> [Def Val] -> [Def Exp] -> Exp -> Agenda -> Count Comp
 define g dvs [] e ls = compute (g :/ reverse dvs) e ls
 define g dvs (DF f hss pes : des) e ls =
   define g (DF f hss pes : dvs) des e ls
@@ -206,7 +216,7 @@ adapsAndHandles _ = []
 -- given: eval. operator `f`, eval. reversed arguments `cs`, env `g`,
 --        handleable commands, non-eval. args `es`, frame stack
 -- Compute until all [Exp] are [Comp], then call `apply`.
-args :: Val -> [Comp] -> Env -> [([Adap], [String])] -> [Exp] -> Agenda -> Comp
+args :: Val -> [Comp] -> Env -> [([Adap], [String])] -> [Exp] -> Agenda -> Count Comp
 args f cs g hss [] ls = apply f (reverse cs) ls                             -- apply when all args are evaluated
 args f cs g [] es ls = args f cs g [([], [])] es ls                         -- default to [] (no handleable commands) if not explicit
 args f cs g (hs : hss) (e : es) ls = compute g e
@@ -215,7 +225,7 @@ args f cs g (hs : hss) (e : es) ls = compute g e
 
 -- `apply` is called by `args` when all arguments are evaluated
 -- given: eval. operator, eval. args, frame stack
-apply :: Val -> [Comp] -> Agenda -> Comp
+apply :: Val -> [Comp] -> Agenda -> Count Comp
 apply (VF g _ pes) cs ls = tryRules g pes cs ls                             -- apply function to evaluated args `cs`
 apply (VB x g) cs ls = case M.lookup x builtins of                          -- apply built-in fct. to evaluated args `cs`
   Just f -> consume (f g cs) ls
@@ -238,8 +248,8 @@ apply f cs ls = error $ concat ["apply: ", show f, show cs, show ls]
 -- If there is no handler, just return a `Call` (comp. is stuck)
 --   cas: commands-already-skipped
 --   cts: commands-to-be-skipped
-command :: String -> [Val] -> SkippedAgenda -> Int -> Agenda -> Comp
-command c vs ks n [] = Call c n vs ks                                       -- if agenda is done (i.e. no handler there), return Call
+command :: String -> [Val] -> SkippedAgenda -> Int -> Agenda -> Count Comp
+command c vs ks n [] = pure (Call c n vs ks)                                       -- if agenda is done (i.e. no handler there), return Call
 command c vs ks n (k@(Arg (adps, hs) f cs g hss es) : ls) =                 -- if there is a handler...
    let n' = applyAdaptorsToCommand adps c n in -- apply adaptors in any case
    let count = length (filter (== c) hs) in
@@ -258,7 +268,7 @@ command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- s
 
 -- given:  env, rules, evaluated args, frame stack
 -- selects first rule that matches and computes that expression
-tryRules :: Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Comp
+tryRules :: Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
 tryRules g [] cs ls = command "abort" [] [] 0 ls                            -- no rule matches
 tryRules g ((ps, e) : pes) cs ls = case matches g ps cs of
   Just g  -> compute g e ls                                                 -- rule matches, compute
@@ -351,7 +361,7 @@ prog g ds = g' where
   g' = g :/ map ev ds
   ev (DF f hss pes) = DF f hss pes
   ev (x := e) = x := v where
-    Ret v = compute g' e []
+    Ret v = evalState (compute g' e []) 0
 
 load :: [Def Exp] -> Env
 load = prog envBuiltins
@@ -366,7 +376,7 @@ loadFile x = do
 
 -- Given env `g` and id `s`,
 try :: Env -> String -> Comp
-try g s = compute g e [] where
+try g s = evalState (compute g e []) 0 where
   Just (e, "") = parse pExp s
 
 ------------------------
@@ -381,20 +391,20 @@ ioHandler (Call "inch" 0 [] ks) =
   do c <- getChar
      -- HACK: for some reason backspace seems to produce '\DEL' instead of '\b'
      let c' = if c == '\DEL' then '\b' else c
-     ioHandler (consume (VX [c']) (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VX [c']) (reverse ks))
 ioHandler comp@(Call "ouch" 0 [VX [c]] ks) =
   do putChar c
      hFlush stdout
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VA "unit" :&& VA "") (reverse ks))
 ioHandler comp@(Call "ouint" 0 [VI k] ks) =
   do putStr (show k)
      hFlush stdout
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VA "unit" :&& VA "") (reverse ks))
 -- Uses threadDelay to sleep for the given amount of time.
 -- Unit of k is microseconds; so `sleep 1000000` will sleep for one second.
 ioHandler comp@(Call "sleep" 0 [VI k] ks) =
   do threadDelay k
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VA "unit" :&& VA "") (reverse ks))
 
 -- Web commands
 -- Use readProcessWithExitCode rather than readProcess as it doesn't also print
@@ -402,18 +412,18 @@ ioHandler comp@(Call "sleep" 0 [VI k] ks) =
 ioHandler (Call "getRequest" 0 [val] ks) =
   do let url = valToString val
      (_, res, _) <- readProcessWithExitCode "curl" ["--request", "GET", url] []
-     ioHandler (consume (stringToVal res) (reverse ks))
+     ioHandler (flip evalState 0 $ consume (stringToVal res) (reverse ks))
 
 -- RefState commands
 ioHandler (Call "new" 0 [v] ks) =
   do ref <- newIORef v
-     ioHandler (consume (VR ref) (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VR ref) (reverse ks))
 ioHandler (Call "write" 0 [VR ref, v] ks) =
   do writeIORef ref v
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip evalState 0 $ consume (VA "unit" :&& VA "") (reverse ks))
 ioHandler (Call "read" 0 [VR ref] ks) =
   do v <- readIORef ref
-     ioHandler (consume v (reverse ks))
+     ioHandler (flip evalState 0 $ consume v (reverse ks))
 
 -- ioHandler (Call "yield" 0 [] ks) =
 --      ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
