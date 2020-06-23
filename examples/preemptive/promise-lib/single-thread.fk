@@ -3,7 +3,7 @@ include std
 include callbacks
 
 -- Yielding needed for pre-emption to work.
-interface Yield = yield : Unit
+-- interface Yield = yield : Unit
 
 ----------------------------
 -- Promise structures.
@@ -138,8 +138,8 @@ hdl cbs <await cell -> client> <server> =
          | empty -> writePid cell (addRes client);
                     hdl cbs unit server!}
                    
--- hdl cbs <yield -> thr> <yield -> control> =
---     hdl cbs (thr unit) (control unit)
+hdl cbs <yield -> thr> <yield -> control> =
+    hdl cbs (thr unit) (control unit)
 
 hdl cbs <yield -> th1> <control> =
     hdl cbs (th1 unit) control!

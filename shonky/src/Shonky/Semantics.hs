@@ -86,90 +86,6 @@ envToList g = envToList' g []
   where envToList' Empty     a = a
         envToList' (g :/ ds) a = envToList' g (ds : a)
 
--- This pretty-printer more-or-less does the right thing for rendering
--- Frank values encoded in shonky.
---
--- One thing it still gets wrong is printing 'nil' for an empty
--- string, because it does not know the type.
---
--- Another problem is that for complex values (including computations)
--- it resorts to invoking show.
-
-ppVal :: Val -> Doc
-ppVal (VA s)  = text $ "'" ++ s   -- TODO: error message here?
-ppVal (VI n)  = int n
-ppVal (VD f)  = text $ show f     -- TODO: replace with something else; couldn't
-                                  -- find a suitable builtin function
-ppVal v@(VA "cons" :&& (VX [_] :&& _)) = doubleQuotes (ppStringVal v)
-ppVal (VA "cons"   :&& (v :&& w))      = ppBrackets $ ppVal v <> ppListVal w
-ppVal (VA "nil"    :&& _)              = ppBrackets empty
-ppVal (VA k        :&& v)              = text k <> ppConsArgs v
-ppVal (VX [c])                         = text $ "'" ++ [c] ++ "'"
-ppVal v = text $ "[COMPLEX VALUE: " ++ show v ++ "]"
-
--- parentheses if necessary
-ppValp :: Val -> Doc
-ppValp v@(VA "cons" :&& (VX [_] :&& _)) = ppVal v   -- string
-ppValp v@(VA _ :&& VA "")               = ppVal v   -- nullary constr.
-ppValp v@(VA _ :&& _)                   = ppParens $ ppVal v
-ppValp v                                = ppVal v
-
-ppConsArgs :: Val -> Doc
-ppConsArgs (v :&& w) = text " " <> ppValp v <> ppConsArgs w
-ppConsArgs (VA "")   = text ""
-ppConsArgs v         = text "[BROKEN CONSTRUCTOR ARGUMENTS: " <> ppVal v <> text "]"
-
-ppStringVal :: Val -> Doc
-ppStringVal (v :&& VA "")                  = ppStringVal v
-ppStringVal (VA "cons" :&& (VX [c] :&& v)) = ppChar c <> ppStringVal v
-ppStringVal (VA "nil")                     = empty
-ppStringVal v                              = text "[BROKEN STRING: " <> ppVal v <> text "]"
-
-ppListVal :: Val -> Doc
-ppListVal (v :&& VA "")             = ppListVal v
-ppListVal (VA "cons" :&& (v :&& w)) = text ", " <> ppVal v <> ppListVal w
-ppListVal (VA "nil")                = text ""
-ppListVal v                         = text "[BROKEN LIST: " <> ppVal v <> text "]"
-
-ppAgenda :: Agenda -> Doc
-ppAgenda ls = vcat (map ppFrame ls)
-
-ppSkippedAgenda :: SkippedAgenda -> Doc
-ppSkippedAgenda ls = vcat (map ppFrame ls)
-
-ppFrame :: Frame -> Doc
-ppFrame (Car g e)              = text "Car" <+> ppEnv g <+> ppExp e
-ppFrame (Cdr v)                = text "Cdr" <+> ppVal v
-ppFrame (Fun g es)             = text "Fun" <+> ppEnv g <+> sep (map ppExp es)
-ppFrame (Arg hs f cs g hss es) = text "Arg" <+> nest 3 (vcat [text "hs =" <+> (text . show) hs,
-                                                             text "f =" <+> ppVal f,
-                                                             text "cs =" <+> nest 3 (vcat $ map ppComp cs),
-                                                             text "g =" <+> nest 3 (ppEnv g),
-                                                             text "hss =" <+> (text . show) hss,
-                                                             text "es" <+> nest 3 (vcat $ map ppExp es)])
-ppFrame (Seq g e)              = text "Seq" <+> ppEnv g <+> ppExp e
-ppFrame (Qes g e)              = text "Qes" <+> ppEnv g <+> ppExp e
-ppFrame (Qed v)                = text "Qed" <+> ppVal v
-ppFrame (Adp (cs, r))          = text "Adp" <+> text "[" <+> (hcat $ punctuate comma (map text cs)) <+> text "]" <+> (text . show) r
-
-ppEnv :: Env -> Doc
-ppEnv g = bracketed empty (map ((bracketed (text "\n")) . (map ppDefVal)) (envToList g))
-
-ppDefVal :: Def Val -> Doc
-ppDefVal (x := v)      = text x <+> text "->" <+> ppVal v
-ppDefVal (DF f [] [])  = text f <+> text "->" <+> text "[empty function]"
-ppDefVal (DF f xs ys)  = ppDef (DF f xs ys)
-
-ppComp :: Comp -> Doc
-ppComp (Ret v)         = text "Ret" <+> ppVal v
-ppComp (Call c n vs a) = text "Call" <+> text c <> text "." <> int n <+> sep (map ppVal vs) $$ ppAgenda a
-
-sepBy :: Doc -> [Doc] -> Doc
-sepBy s ds = vcat $ punctuate s ds
-
-bracketed :: Doc -> [Doc] -> Doc
-bracketed s ds = lbrack <+> (sepBy s ds <+> rbrack)
-
 
 -- Look-up a definition
 fetch :: Env -> String -> Val
@@ -226,64 +142,6 @@ consume v (Def g dvs x des e : ls) = define g ((x := v) : dvs) des e (ls)   -- (
 consume v (Txt g cs ces      : ls) = combine g (revapp (txt v) cs) ces (ls) -- (not used by Frank)
 consume v (Adp (cs, r)       : ls) = consume v ls                           -- ignore addaptor when value is obtained
 consume v []                       = Ret v
-
--- inch, ouch, inint and ouint commands in the IO monad
--- only if the level is 0 --TODO LC: rethink this?
-ioHandler :: Comp -> IO Val
-ioHandler (Ret v) = return v
--- Console commands
-ioHandler (Call "inch" 0 [] ks) =
-  do c <- getChar
-     -- HACK: for some reason backspace seems to produce '\DEL' instead of '\b'
-     let c' = if c == '\DEL' then '\b' else c
-     ioHandler (consume (VX [c']) (reverse ks))
-ioHandler comp@(Call "ouch" 0 [VX [c]] ks) =
-  do putChar c
-     hFlush stdout
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
-ioHandler comp@(Call "ouint" 0 [VI k] ks) =
-  do putStr (show k)
-     hFlush stdout
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
--- Uses threadDelay to sleep for the given amount of time.
--- Unit of k is microseconds; so `sleep 1000000` will sleep for one second.
-ioHandler comp@(Call "sleep" 0 [VI k] ks) =
-  do threadDelay k
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
-
--- Web commands
--- Use readProcessWithExitCode rather than readProcess as it doesn't also print
--- out all the extra, useless information
-ioHandler (Call "getRequest" 0 [val] ks) =
-  do let url = valToString val
-     (_, res, _) <- readProcessWithExitCode "curl" ["--request", "GET", url] []
-     ioHandler (consume (stringToVal res) (reverse ks))
-
--- RefState commands
-ioHandler (Call "new" 0 [v] ks) =
-  do ref <- newIORef v
-     ioHandler (consume (VR ref) (reverse ks))
-ioHandler (Call "write" 0 [VR ref, v] ks) =
-  do writeIORef ref v
-     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
-ioHandler (Call "read" 0 [VR ref] ks) =
-  do v <- readIORef ref
-     ioHandler (consume v (reverse ks))
-ioHandler (Call c n vs ks) = error $ "Unhandled command: " ++ c ++ "." ++
-                                     show n ++ concat (map (\v -> " " ++
-                                    (show . ppVal) v) vs)
-
--- takes a value representing a string and extracts the actual string out of it.
-valToString :: Val -> String
-valToString (VX c) = c
-valToString (this :&& rest) = valToString this ++ valToString rest
-valToString _ = ""
-
--- and back again. shonky has a strange encoding where you need these `VA ""`s
--- at the end of everything
-stringToVal :: String -> Val
-stringToVal [] = VA "nil" :&& VA ""
-stringToVal (c:cs) = VA "cons" :&& (VX [c] :&& ((stringToVal cs) :&& VA ""))
 
 -- A helper to simplify strings (list of characters)
 -- this allows regular list append [x|xs] to function like [|`x``xs`|] but
@@ -487,9 +345,66 @@ try :: Env -> String -> Comp
 try g s = compute g e [] where
   Just (e, "") = parse pExp s
 
---
+------------------------
 -- Builtins
---
+
+-- inch, ouch, inint and ouint commands in the IO monad
+-- only if the level is 0 --TODO LC: rethink this?
+ioHandler :: Comp -> IO Val
+ioHandler (Ret v) = return v
+-- Console commands
+ioHandler (Call "inch" 0 [] ks) =
+  do c <- getChar
+     -- HACK: for some reason backspace seems to produce '\DEL' instead of '\b'
+     let c' = if c == '\DEL' then '\b' else c
+     ioHandler (consume (VX [c']) (reverse ks))
+ioHandler comp@(Call "ouch" 0 [VX [c]] ks) =
+  do putChar c
+     hFlush stdout
+     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+ioHandler comp@(Call "ouint" 0 [VI k] ks) =
+  do putStr (show k)
+     hFlush stdout
+     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+-- Uses threadDelay to sleep for the given amount of time.
+-- Unit of k is microseconds; so `sleep 1000000` will sleep for one second.
+ioHandler comp@(Call "sleep" 0 [VI k] ks) =
+  do threadDelay k
+     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+
+-- Web commands
+-- Use readProcessWithExitCode rather than readProcess as it doesn't also print
+-- out all the extra, useless information
+ioHandler (Call "getRequest" 0 [val] ks) =
+  do let url = valToString val
+     (_, res, _) <- readProcessWithExitCode "curl" ["--request", "GET", url] []
+     ioHandler (consume (stringToVal res) (reverse ks))
+
+-- RefState commands
+ioHandler (Call "new" 0 [v] ks) =
+  do ref <- newIORef v
+     ioHandler (consume (VR ref) (reverse ks))
+ioHandler (Call "write" 0 [VR ref, v] ks) =
+  do writeIORef ref v
+     ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+ioHandler (Call "read" 0 [VR ref] ks) =
+  do v <- readIORef ref
+     ioHandler (consume v (reverse ks))
+ioHandler (Call c n vs ks) = error $ "Unhandled command: " ++ c ++ "." ++
+                                     show n ++ concat (map (\v -> " " ++
+                                    (show . ppVal) v) vs)
+
+-- takes a value representing a string and extracts the actual string out of it.
+valToString :: Val -> String
+valToString (VX c) = c
+valToString (this :&& rest) = valToString this ++ valToString rest
+valToString _ = ""
+
+-- and back again. shonky has a strange encoding where you need these `VA ""`s
+-- at the end of everything
+stringToVal :: String -> Val
+stringToVal [] = VA "nil" :&& VA ""
+stringToVal (c:cs) = VA "cons" :&& (VX [c] :&& ((stringToVal cs) :&& VA ""))
 
 -- Given env and 2 operands (that are values), compute result
 plus :: Env -> [Comp] -> Val
@@ -622,3 +537,89 @@ builtins = M.fromList [("plus", plus), ("minus", minus), ("eqc", eqc)
 -- TODO: Generate this from `builtins`.
 envBuiltins :: Env
 envBuiltins = Empty :/ map (\x -> DF x [] []) (M.keys builtins)
+
+
+
+-- This pretty-printer more-or-less does the right thing for rendering
+-- Frank values encoded in shonky.
+--
+-- One thing it still gets wrong is printing 'nil' for an empty
+-- string, because it does not know the type.
+--
+-- Another problem is that for complex values (including computations)
+-- it resorts to invoking show.
+
+ppVal :: Val -> Doc
+ppVal (VA s)  = text $ "'" ++ s   -- TODO: error message here?
+ppVal (VI n)  = int n
+ppVal (VD f)  = text $ show f     -- TODO: replace with something else; couldn't
+                                  -- find a suitable builtin function
+ppVal v@(VA "cons" :&& (VX [_] :&& _)) = doubleQuotes (ppStringVal v)
+ppVal (VA "cons"   :&& (v :&& w))      = ppBrackets $ ppVal v <> ppListVal w
+ppVal (VA "nil"    :&& _)              = ppBrackets empty
+ppVal (VA k        :&& v)              = text k <> ppConsArgs v
+ppVal (VX [c])                         = text $ "'" ++ [c] ++ "'"
+ppVal v = text $ "[COMPLEX VALUE: " ++ show v ++ "]"
+
+-- parentheses if necessary
+ppValp :: Val -> Doc
+ppValp v@(VA "cons" :&& (VX [_] :&& _)) = ppVal v   -- string
+ppValp v@(VA _ :&& VA "")               = ppVal v   -- nullary constr.
+ppValp v@(VA _ :&& _)                   = ppParens $ ppVal v
+ppValp v                                = ppVal v
+
+ppConsArgs :: Val -> Doc
+ppConsArgs (v :&& w) = text " " <> ppValp v <> ppConsArgs w
+ppConsArgs (VA "")   = text ""
+ppConsArgs v         = text "[BROKEN CONSTRUCTOR ARGUMENTS: " <> ppVal v <> text "]"
+
+ppStringVal :: Val -> Doc
+ppStringVal (v :&& VA "")                  = ppStringVal v
+ppStringVal (VA "cons" :&& (VX [c] :&& v)) = ppChar c <> ppStringVal v
+ppStringVal (VA "nil")                     = empty
+ppStringVal v                              = text "[BROKEN STRING: " <> ppVal v <> text "]"
+
+ppListVal :: Val -> Doc
+ppListVal (v :&& VA "")             = ppListVal v
+ppListVal (VA "cons" :&& (v :&& w)) = text ", " <> ppVal v <> ppListVal w
+ppListVal (VA "nil")                = text ""
+ppListVal v                         = text "[BROKEN LIST: " <> ppVal v <> text "]"
+
+ppAgenda :: Agenda -> Doc
+ppAgenda ls = vcat (map ppFrame ls)
+
+ppSkippedAgenda :: SkippedAgenda -> Doc
+ppSkippedAgenda ls = vcat (map ppFrame ls)
+
+ppFrame :: Frame -> Doc
+ppFrame (Car g e)              = text "Car" <+> ppEnv g <+> ppExp e
+ppFrame (Cdr v)                = text "Cdr" <+> ppVal v
+ppFrame (Fun g es)             = text "Fun" <+> ppEnv g <+> sep (map ppExp es)
+ppFrame (Arg hs f cs g hss es) = text "Arg" <+> nest 3 (vcat [text "hs =" <+> (text . show) hs,
+                                                             text "f =" <+> ppVal f,
+                                                             text "cs =" <+> nest 3 (vcat $ map ppComp cs),
+                                                             text "g =" <+> nest 3 (ppEnv g),
+                                                             text "hss =" <+> (text . show) hss,
+                                                             text "es" <+> nest 3 (vcat $ map ppExp es)])
+ppFrame (Seq g e)              = text "Seq" <+> ppEnv g <+> ppExp e
+ppFrame (Qes g e)              = text "Qes" <+> ppEnv g <+> ppExp e
+ppFrame (Qed v)                = text "Qed" <+> ppVal v
+ppFrame (Adp (cs, r))          = text "Adp" <+> text "[" <+> (hcat $ punctuate comma (map text cs)) <+> text "]" <+> (text . show) r
+
+ppEnv :: Env -> Doc
+ppEnv g = bracketed empty (map ((bracketed (text "\n")) . (map ppDefVal)) (envToList g))
+
+ppDefVal :: Def Val -> Doc
+ppDefVal (x := v)      = text x <+> text "->" <+> ppVal v
+ppDefVal (DF f [] [])  = text f <+> text "->" <+> text "[empty function]"
+ppDefVal (DF f xs ys)  = ppDef (DF f xs ys)
+
+ppComp :: Comp -> Doc
+ppComp (Ret v)         = text "Ret" <+> ppVal v
+ppComp (Call c n vs a) = text "Call" <+> text c <> text "." <> int n <+> sep (map ppVal vs) $$ ppAgenda a
+
+sepBy :: Doc -> [Doc] -> Doc
+sepBy s ds = vcat $ punctuate s ds
+
+bracketed :: Doc -> [Doc] -> Doc
+bracketed s ds = lbrack <+> (sepBy s ds <+> rbrack)
