@@ -103,10 +103,6 @@ apply cbId threadId callback thread =
 ----------------------------
 -- Handler
 
-hdlSingle : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
-    -> <Promise[Console, Yield]> Unit -- thread
-    -> [Console, RefState] Unit}
-
 hdl : {Callbacks [Console, Promise [Console, Yield], RefState, Yield]
     -> <Promise[Console, Yield], Yield> Unit -- thread
     -> <Promise[Console, Yield], Yield> Unit -- controller
@@ -142,8 +138,8 @@ hdl cbs <await cell -> client> <server> =
          | empty -> writePid cell (addRes client);
                     hdl cbs unit server!}
                    
-hdl cbs <yield -> thr> <yield -> control> =
-    hdl cbs (thr unit) (control unit)
+-- hdl cbs <yield -> thr> <yield -> control> =
+--     hdl cbs (thr unit) (control unit)
 
 hdl cbs <yield -> th1> <control> =
     hdl cbs (th1 unit) control!
