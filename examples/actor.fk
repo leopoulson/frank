@@ -67,21 +67,26 @@ data Pid X = pid (Ref (ZipQ X))
 
 runActor : {Pid X -> <Actor X>Unit ->
              [Co [RefState], RefState]Unit}
+
 runActor mine    <self -> k> = runActor mine (k mine)
+
 runActor mine    <spawn you -> k> =
   let yours = pid (new (emptyZipQ!)) in
   fork {runActor yours (<RefState, Co> you!)};
   runActor mine (k yours)
+
 runActor (pid m) <recv -> k> =
   case (runFifo (read m) dequeue!)
     { (pair nothing _)  -> yield!;
                            runActor (pid m) (k recv!)
     | (pair (just x) q) -> write m q;
                            runActor (pid m) (k x) }
+
 runActor mine    <send x (pid m) -> k> =
   case (runFifo (read m) (enqueue x))
         { (pair _ q) -> write m q;
                         runActor mine (k unit) }
+
 runActor mine    unit = unit
 
 act : {<Actor X>Unit -> [RefState]Unit}
