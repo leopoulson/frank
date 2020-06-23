@@ -21,8 +21,11 @@ data Exp
   | Exp :$ [Exp]                            -- n-ary application
   | Exp :! Exp                              -- composition (;)
   | Exp :// Exp                             -- composition (o)
-  | EF [([Adap], [String])] [([Pat], Exp)]  -- handler                      -- [([Adap], [String])]:     for each arg pos, which adaptors are applied and which commands are handled and how often (potentially multiple occurrences)?
-                                                                            -- [([Pat], Exp)]: pattern matching rules
+  | EF [([Adap], [String])] [([Pat], Exp)]  -- handler
+  -- [([Adap], [String])]: for each arg pos, which adaptors are applied and
+  -- which commands are handled and how often (potentially multiple
+  -- occurrences)?
+  -- [([Pat], Exp)]: pattern matching rules
   | [Def Exp] :- Exp                        -- ? (not used by Frank)
   | EX [Either Char Exp]                    -- string concat expression
     -- (used only for characters in source Frank (Left c), but used by

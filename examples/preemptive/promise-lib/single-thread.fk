@@ -44,7 +44,7 @@ writePid (pid cell) x = write cell x
 
 counter : {Int -> [Console, Yield]Unit}
 counter x = ouint x; print " ";
-            sleep 200000;
+            sleepAndYield 200000;
             yield!;
             counter (x + 1)
 
@@ -64,7 +64,9 @@ waitForStop! =
 sleepAndYield : Int -> [Console, Yield]Unit
 sleepAndYield x = if (x < 0)
               { unit }
-              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+              { sleep 100000;
+                yield!;
+                sleepAndYield (x - 100000) }
 
 thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread1! = print "starting"; waitForStop!; counter 0
@@ -139,9 +141,11 @@ hdl cbs <await cell -> client> <server> =
                     hdl cbs unit server!}
                    
 hdl cbs <yield -> thr> <yield -> control> =
+    -- print "q";
     hdl cbs (thr unit) (control unit)
 
 hdl cbs <yield -> th1> <control> =
+    print "t";
     hdl cbs (th1 unit) control!
 
 hdl cbs <th1> <yield -> control> =
@@ -150,5 +154,10 @@ hdl cbs <th1> <yield -> control> =
 hdl _ unit _ = print "thread1 exits"
 hdl _ _ unit = print "controller exits"
 
+-- hdlYield : {<Yield> Unit -> Unit}
+-- hdlYield <yield -> k> = hdlYield (k unit)
+-- hdlYield unit = unit
+
 main : {[Console, RefState]Unit}
-main! = hdl cbnil thread1! controller!
+-- main! = hdlYield (hdl cbnil thread1! controller!)
+main! = (hdl cbnil thread1! controller!)

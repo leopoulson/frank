@@ -29,7 +29,7 @@ instance Show (IORef a) where
   show _ = "<ioref>"
 
 data Val
-  = VA String                                                               -- atom
+  = VA String                                                               -- atom, i.e. command names
   | VI Int                                                                  -- int
   | VD Double                                                               -- float (double)
   | Val :&& Val                                                             -- cons
@@ -115,9 +115,17 @@ compute g (EV x)       ls   = consume (fetch g x) ls                        -- 1
 compute g (EA a)       ls   = consume (VA a) ls                             -- 1) feed atom
 compute g (EI n)       ls   = consume (VI n) ls                             -- 1) feed int
 compute g (ED f)       ls   = consume (VD f) ls                             -- 1) feed double
-compute g (a :& d)     ls   = compute g a (Car g d : ls)                    -- 2) compute head. save tail for later.
+compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
+
+compute g ((EA "yield" :$ [])) ls = trace "found it!" $
+  compute g (EA "yield") (Fun g [] : ls)
+
 compute g (f :$ as)    ls   = compute g f (Fun g as : ls)                   -- 2) Application. Compute function. Save args for later.
-compute g (e :! f)     ls   = compute g e (Seq g f : ls)                    -- 2) Sequence.    Compute 1st exp.  Save 2nd for later.
+
+-- original
+compute g (e :! f)     ls   =
+  compute g e (Seq g f : ls)
+
 compute g (e :// f)    ls   = compute g e (Qes g f : ls)                    -- 2) Composition. Compute 1st exp.  save 2nd for later.
 compute g (EF hss pes) ls   = consume (VF g hss pes) ls                     -- 1) feed in function
 compute g (ds :- e)    ls   = define g [] ds e ls                           -- (not used by Frank)
@@ -126,21 +134,37 @@ compute g (ER (cs, r) e) ls = compute g e (Adp (cs, r) : ls)                -- 2
 
 -- Take val `v` and top-frame from stack, apply it to `v` in
 consume :: Val -> Agenda -> Comp
-consume v (Car g d    : ls) = compute g d (Cdr v : ls)                      -- Given: eval. head `v`,     non-eval. tail `d`.  Record `v` and compute tail `d`.
-consume v (Cdr u      : ls) = consume (simplStr u v) (ls)                   -- Given: eval. head `u`,     eval.     tail `v`.  Put together.
-consume v (Fun g as   : ls) = args v [] g (adapsAndHandles v) as (ls)       -- Given: eval. function `v`, non-eval. args `as`. Compute `as`, then feed them into `v`
+ -- Given: eval. head `v`,     non-eval. tail `d`.  Record `v` and compute tail `d`.
+consume v (Car g d    : ls) = compute g d (Cdr v : ls)
+
+ -- Given: eval. head `u`,     eval.     tail `v`.  Put together.
+consume v (Cdr u      : ls) = consume (simplStr u v) (ls)
+
+-- Given: eval. function `v`, non-eval. args `as`. Compute `as`, then feed them into `v`
+consume v (Fun g as   : ls) =  args v [] g (adapsAndHandles v) as (ls)
+
+ -- Given: Eval.:     handler `f`,
+                             --                   first args `cs` (reversed),
+                             --                   current arg `v`
+                             --        Non-eval.: last args `es`
+                             -- Add `v` to `cs` and re-call `args`
 consume v (Arg _ f cs g
-               hss es : ls) = args f (Ret v : cs) g hss es (ls)             -- Given: Eval.:     handler `f`,
-                                                                                      --                   first args `cs` (reversed),
-                                                                                      --                   current arg `v`
-                                                                                      --        Non-eval.: last args `es`
-                                                                                      -- Add `v` to `cs` and re-call `args`
-consume _ (Seq g e           : ls) = compute g e (ls)                       -- Sequence.    Given: eval. 1st _,   non-eval. 2nd `e`. Compute `e`.
-consume v (Qes g e           : ls) = compute g e (Qed v : ls)               -- Composition. Given: eval. 1st `v`, non-eval. 2nd `e`. Record `v` and compute `e`.
-consume _ (Qed v             : ls) = consume v (ls)                         -- LC: Bug here? Why discard argument? (but not used by Frank so far anyway)
-consume v (Def g dvs x des e : ls) = define g ((x := v) : dvs) des e (ls)   -- (not used by Frank)
-consume v (Txt g cs ces      : ls) = combine g (revapp (txt v) cs) ces (ls) -- (not used by Frank)
-consume v (Adp (cs, r)       : ls) = consume v ls                           -- ignore addaptor when value is obtained
+               hss es : ls) = args f (Ret v : cs) g hss es (ls)
+
+  -- Sequence.    Given: eval. 1st _,   non-eval. 2nd `e`. Compute `e`.
+consume _ (Seq g e           : ls) = compute g e (ls)
+
+-- Composition. Given: eval. 1st `v`, non-eval. 2nd `e`. Record `v` and compute `e`.
+consume v (Qes g e           : ls) = compute g e (Qed v : ls)
+
+-- LC: Bug here? Why discard argument? (but not used by Frank so far anyway)
+consume _ (Qed v             : ls) = consume v (ls)
+-- (not used by Frank)
+consume v (Def g dvs x des e : ls) = define g ((x := v) : dvs) des e (ls)
+-- (not used by Frank)
+consume v (Txt g cs ces      : ls) = combine g (revapp (txt v) cs) ces (ls)
+ -- ignore addaptor when value is obtained
+consume v (Adp (cs, r)       : ls) = consume v ls
 consume v []                       = Ret v
 
 -- A helper to simplify strings (list of characters)
@@ -390,6 +414,11 @@ ioHandler (Call "write" 0 [VR ref, v] ks) =
 ioHandler (Call "read" 0 [VR ref] ks) =
   do v <- readIORef ref
      ioHandler (consume v (reverse ks))
+
+-- ioHandler (Call "yield" 0 [] ks) =
+--      ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+    
+-- Here we need to see if
 ioHandler (Call c n vs ks) = error $ "Unhandled command: " ++ c ++ "." ++
                                      show n ++ concat (map (\v -> " " ++
                                     (show . ppVal) v) vs)
