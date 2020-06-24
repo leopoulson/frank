@@ -46,7 +46,7 @@ data Val
 -- comp: value or command call
 data Comp
   = Ret Val                                                                 -- value
-  | Call String Int Int [Val] Agenda                                            -- command call: cmd-id, cmd-level, cmd count, values, suspended agenda
+  | Call String Int [Val] Agenda                                            -- command call: cmd-id, cmd-level, values, suspended agenda
   deriving Show
 
 -- stack of (collections of definitions)
@@ -82,6 +82,7 @@ type Agenda = [Frame]
 type SkippedAgenda = [Frame]
 -- [Frame]: Skipped frames (most recently skipped frame is on top)
 
+-- Counts the number of function calls, so we can insert yields.
 type Count s = State Int s
 
 envToList :: Env -> [[Def Val]]
@@ -240,7 +241,7 @@ apply (VA a) cs ls =                                                        -- a
   -- commands are not handlers, so the cs must all be values
   command a (map (\ (Ret v) -> v) cs) [] 0 ls
 apply (VC (Ret v)) [] ls = consume v ls                                     -- apply a value-thunk to 0 args (force)
-apply (VC (Call a n k vs ks)) [] ls = command a vs ks n ls                    -- apply a command-thunk to 0 args (force), `n` determines how many handlers to skip
+apply (VC (Call a n vs ks)) [] ls = command a vs ks n ls                    -- apply a command-thunk to 0 args (force), `n` determines how many handlers to skip
 apply (VK sag) [Ret v] ag = consume v (revapp sag ag)                       -- execute a continuation by providing return value:
 apply f cs ls = error $ concat ["apply: ", show f, show cs, show ls]
 
@@ -255,11 +256,11 @@ apply f cs ls = error $ concat ["apply: ", show f, show cs, show ls]
 --   cas: commands-already-skipped
 --   cts: commands-to-be-skipped
 command :: String -> [Val] -> SkippedAgenda -> Int -> Agenda -> Count Comp
-command c vs ks n [] = do k <- get; pure (Call c n k vs ks)                                       -- if agenda is done (i.e. no handler there), return Call
+command c vs ks n [] = pure (Call c n vs ks)                                       -- if agenda is done (i.e. no handler there), return Call
 command c vs ks n (k@(Arg (adps, hs) f cs g hss es) : ls) =                 -- if there is a handler...
    let n' = applyAdaptorsToCommand adps c n in -- apply adaptors in any case
    let count = length (filter (== c) hs) in
-   if n' < count then do steps <- get; args f (Call c n' steps vs ks : cs) g hss es ls             -- ... that can handle `c`:    handle it
+   if n' < count then args f (Call c n' vs ks : cs) g hss es ls             -- ... that can handle `c`:    handle it
                  else command c vs (k : ks) (n'-count) ls                   -- ... that cannot handle `c`: recurse
   where applyAdaptorsToCommand :: [Adap] -> String -> Int -> Int
         applyAdaptorsToCommand [] c n = n
@@ -294,7 +295,7 @@ matches _ _ _ = Nothing
 match :: Env -> Pat -> Comp -> Maybe Env
 match g (PV q) (Ret v) = vmatch g q v                                       -- value matching, no binding
 match g (PT x) c = return (g :/ [x := VC c])                                -- variable binding
-match g (PC c n qs x) (Call c' n' _ vs ks) = do                               -- command call matching: cmd parameters `vs`, continuation (future agenda)
+match g (PC c n qs x) (Call c' n' vs ks) = do                               -- command call matching: cmd parameters `vs`, continuation (future agenda)
   guard (c == c')
   guard (n == n')
   g <- vmatches g qs vs
@@ -381,8 +382,8 @@ loadFile x = do
   return (prog envBuiltins d)
 
 -- Given env `g` and id `s`,
-try :: Env -> String -> Comp
-try g s = evalState (compute g e []) 0 where
+try :: Env -> String -> (Comp, Int)
+try g s = runState (compute g e []) 0 where
   Just (e, "") = parse pExp s
 
 ------------------------
@@ -390,52 +391,52 @@ try g s = evalState (compute g e []) 0 where
 
 -- inch, ouch, inint and ouint commands in the IO monad
 -- only if the level is 0 --TODO LC: rethink this?
-ioHandler :: Comp -> IO Val
-ioHandler (Ret v) = return v
+ioHandler :: (Comp, Int) -> IO Val
+ioHandler (Ret v, _) = return v
 -- Console commands
-ioHandler (Call "inch" 0 count [] ks) =
+ioHandler (Call "inch" 0 [] ks, count) =
   do c <- getChar
      -- HACK: for some reason backspace seems to produce '\DEL' instead of '\b'
      let c' = if c == '\DEL' then '\b' else c
-     ioHandler (flip evalState count $ consume (VX [c']) (reverse ks))
-ioHandler comp@(Call "ouch" 0 count [VX [c]] ks) =
+     ioHandler (flip runState count (consume (VX [c']) (reverse ks)))
+ioHandler (Call "ouch" 0 [VX [c]] ks, count) =
   do putChar c
      hFlush stdout
-     ioHandler (flip evalState count $ consume (VA "unit" :&& VA "") (reverse ks))
-ioHandler comp@(Call "ouint" 0 count [VI k] ks) =
+     ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
+ioHandler (Call "ouint" 0 [VI k] ks, count) =
   do putStr (show k)
      hFlush stdout
-     ioHandler (flip evalState count $ consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
 -- Uses threadDelay to sleep for the given amount of time.
 -- Unit of k is microseconds; so `sleep 1000000` will sleep for one second.
-ioHandler comp@(Call "sleep" 0 count [VI k] ks) =
+ioHandler (Call "sleep" 0 [VI k] ks, count) =
   do threadDelay k
-     ioHandler (flip evalState count $ consume (VA "unit" :&& VA "") (reverse ks))
+     ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
 
 -- Web commands
 -- Use readProcessWithExitCode rather than readProcess as it doesn't also print
 -- out all the extra, useless information
-ioHandler (Call "getRequest" 0 count [val] ks) =
+ioHandler (Call "getRequest" 0 [val] ks, count) =
   do let url = valToString val
      (_, res, _) <- readProcessWithExitCode "curl" ["--request", "GET", url] []
-     ioHandler (flip evalState count $ consume (stringToVal res) (reverse ks))
+     ioHandler (flip runState count (consume (stringToVal res) (reverse ks)))
 
 -- RefState commands
-ioHandler (Call "new" 0 count [v] ks) =
+ioHandler (Call "new" 0 [v] ks, count) =
   do ref <- newIORef v
-     ioHandler (flip evalState count $ consume (VR ref) (reverse ks))
-ioHandler (Call "write" 0 count [VR ref, v] ks) =
+     ioHandler (flip runState count (consume (VR ref) (reverse ks)))
+ioHandler (Call "write" 0 [VR ref, v] ks, count) =
   do writeIORef ref v
-     ioHandler (flip evalState count $ consume (VA "unit" :&& VA "") (reverse ks))
-ioHandler (Call "read" 0 count [VR ref] ks) =
+     ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
+ioHandler (Call "read" 0 [VR ref] ks, count) =
   do v <- readIORef ref
-     ioHandler (flip evalState count $ consume v (reverse ks))
+     ioHandler (flip runState count (consume v (reverse ks)))
 
 -- ioHandler (Call "yield" 0 [] ks) =
 --      ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
     
 -- Here we need to see if
-ioHandler (Call c n _ vs ks) = error $ "Unhandled command: " ++ c ++ "." ++
+ioHandler (Call c n vs ks, _) = error $ "Unhandled command: " ++ c ++ "." ++
                                      show n ++ concat (map (\v -> " " ++
                                     (show . ppVal) v) vs)
 
@@ -661,7 +662,7 @@ ppDefVal (DF f xs ys)  = ppDef (DF f xs ys)
 
 ppComp :: Comp -> Doc
 ppComp (Ret v)         = text "Ret" <+> ppVal v
-ppComp (Call c n _ vs a) = text "Call" <+> text c <> text "." <> int n <+> sep (map ppVal vs) $$ ppAgenda a
+ppComp (Call c n vs a) = text "Call" <+> text c <> text "." <> int n <+> sep (map ppVal vs) $$ ppAgenda a
 
 sepBy :: Doc -> [Doc] -> Doc
 sepBy s ds = vcat $ punctuate s ds

@@ -144,10 +144,11 @@ compileProg progName p args =
 evalProg :: Shonky.Env -> String -> IO ()
 evalProg env tm =
   case Shonky.try env tm of
-    Shonky.Ret v -> putStrLn $ (show . Shonky.ppVal) v
-    comp -> do -- putStrLn $ "Generated computation: " ++ show comp
-               putStrLn "Running IO\n"
-               v <- Shonky.ioHandler comp
+    (Shonky.Ret v, _) -> putStrLn $ (show . Shonky.ppVal) v
+    -- returning operation call and count so far
+    (comp, k) -> do -- putStrLn $ "Generated computation: " ++ show comp
+               -- carry on running, with count thus far
+               v <- Shonky.ioHandler (comp, k)
                putStrLn $ (show . Shonky.ppVal) v
 
 compileAndRunProg :: String -> Args -> IO ()
