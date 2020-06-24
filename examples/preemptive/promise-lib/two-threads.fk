@@ -3,7 +3,7 @@ include std
 include callbacks
 
 -- Yielding needed for pre-emption to work.
-interface Yield = yield : Unit
+-- interface Yield = yield : Unit
 
 ----------------------------
 -- Promise structures.
@@ -190,6 +190,8 @@ hdl cbs <th1> <th2> <signal sig -> control> =
         ((applyMany 1 sig th2 cbsHere)!)
         (control unit)
 
+hdl cbs <yield -> th1> <yield -> th2> <yield -> control> =
+    hdl cbs (th1 unit) (th2 unit) (control unit)
 
 hdl cbs <yield -> th1> <th2> <yield -> control> =
     hdl cbs (th1 unit) th2! (control unit)
@@ -210,5 +212,10 @@ hdl _ unit _ _ = print "thread1 exits"
 hdl _ _ unit _ = print "thread2 exits"
 hdl _ _ _ unit = print "controller exits"
 
+
+hdlYield : {<Yield> Unit -> Unit}
+hdlYield <yield -> k> = hdlYield (k unit)
+hdlYield unit = unit
+
 main : {[Console, RefState]Unit}
-main! = hdl cbnil thread1! thread2! (controller 0)
+main! = hdlYield (hdl cbnil thread1! thread2! (controller 0))
