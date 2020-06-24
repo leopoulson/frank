@@ -140,11 +140,13 @@ compileProg progName p args =
        Shonky.loadFile progName
   else return $ Shonky.load $ compile p
 
+-- This is where any commands to be handled 'outside' of Frank get handled.
 evalProg :: Shonky.Env -> String -> IO ()
 evalProg env tm =
   case Shonky.try env tm of
     Shonky.Ret v -> putStrLn $ (show . Shonky.ppVal) v
     comp -> do -- putStrLn $ "Generated computation: " ++ show comp
+               putStrLn "Running IO\n"
                v <- Shonky.ioHandler comp
                putStrLn $ (show . Shonky.ppVal) v
 
