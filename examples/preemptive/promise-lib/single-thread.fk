@@ -44,7 +44,7 @@ writePid (pid cell) x = write cell x
 
 counter : {Int -> [Console, Yield]Unit}
 counter x = ouint x; print " ";
-            sleepMany 200000;
+            sleepMany 180000;
             -- yield!;
             counter (x + 1)
 
@@ -64,9 +64,9 @@ waitForStop! =
 sleepMany : Int -> [Console, Yield]Unit
 sleepMany x = if (x < 0)
               { unit }
-              { sleep 50000;
+              { sleep 5000;
                 -- yield!;
-                sleepMany (x - 50000) }
+                sleepMany (x - 5000) }
 
 thread1 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread1! = print "starting"; waitForStop!; counter 0
@@ -154,10 +154,10 @@ hdl cbs <th1> <yield -> control> =
 hdl _ unit _ = print "thread1 exits"
 hdl _ _ unit = print "controller exits"
 
--- hdlYield : {<Yield> Unit -> Unit}
--- hdlYield <yield -> k> = hdlYield (k unit)
--- hdlYield unit = unit
+hdlYield : {<Yield> Unit -> Unit}
+hdlYield <yield -> k> = hdlYield (k unit)
+hdlYield unit = unit
 
 main : {[Console, RefState]Unit}
--- main! = hdlYield (hdl cbnil thread1! controller!)
-main! = (hdl cbnil thread1! controller!)
+main! = hdlYield (hdl cbnil thread1! controller!)
+-- main! = (hdl cbnil thread1! controller!)

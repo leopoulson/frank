@@ -120,18 +120,24 @@ compute g (EI n)       ls   = consume (VI n) ls                             -- 1
 compute g (ED f)       ls   = consume (VD f) ls                             -- 1) feed double
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
-compute g ((EA "yield" :$ [])) ls = -- trace "found it!" $
-  compute g (EA "yield") (Fun g [] : ls)
+-- compute g ((EA "yield" :$ [])) ls = -- trace "found it!" $
+--   compute g (EA "yield") (Fun g [] : ls)
 
-compute g (f :$ as)    ls   = compute g f (Fun g as : ls)                   -- 2) Application. Compute function. Save args for later.
+compute g (f :$ as)    ls   =  -- 2) Application. Compute function. Save args for later.
+  do modify (+1);
+     now <- get;
+     if (now > 200)
+       then do put 0;
+               compute g ((EA "yield" :$ []) :! (f :$ as)) ls
+       else compute g f (Fun g as : ls)
 
 -- original
 compute g (e :! f)     ls   =
   do modify (+1);
      now <- get;
      -- trace ("st is " ++ show now ++ "\n") $
-      (if (now `mod` 7 == 0)
-       then do -- put (-1);
+      (if (now > 200)
+       then do put 0;
                -- trace "inserting" $
                  compute g ((EA "yield" :$ []) :! (e :! f)) ls
        else compute g e (Seq g f : ls))
@@ -151,7 +157,7 @@ consume v (Car g d    : ls) = compute g d (Cdr v : ls)
 consume v (Cdr u      : ls) = consume (simplStr u v) (ls)
 
 -- Given: eval. function `v`, non-eval. args `as`. Compute `as`, then feed them into `v`
-consume v (Fun g as   : ls) =  args v [] g (adapsAndHandles v) as (ls)
+consume v (Fun g as   : ls) = args v [] g (adapsAndHandles v) as (ls)
 
  -- Given: Eval.:     handler `f`,
                              --                   first args `cs` (reversed),
@@ -253,7 +259,7 @@ command c vs ks n [] = do k <- get; pure (Call c n k vs ks)                     
 command c vs ks n (k@(Arg (adps, hs) f cs g hss es) : ls) =                 -- if there is a handler...
    let n' = applyAdaptorsToCommand adps c n in -- apply adaptors in any case
    let count = length (filter (== c) hs) in
-   if n' < count then do count <- get; args f (Call c n' count vs ks : cs) g hss es ls             -- ... that can handle `c`:    handle it
+   if n' < count then do steps <- get; args f (Call c n' steps vs ks : cs) g hss es ls             -- ... that can handle `c`:    handle it
                  else command c vs (k : ks) (n'-count) ls                   -- ... that cannot handle `c`: recurse
   where applyAdaptorsToCommand :: [Adap] -> String -> Int -> Int
         applyAdaptorsToCommand [] c n = n
