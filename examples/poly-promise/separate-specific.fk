@@ -2,50 +2,19 @@ include std
 
 include map
 
----------------- Helpers
-snocOrInsert : {Sig -> X -> Map Sig (List X) -> Map Sig (List X)}
-snocOrInsert sig x mnil = mentry sig [x] mnil
-snocOrInsert sig x (mentry sig' xs rest) =
-    if (eqSig sig sig')
-      { mentry sig' (snoc xs x) rest }
-      { mentry sig' xs (snocOrInsert sig x rest) }
-
--- equality between signals
-eqSig : {Sig -> Sig -> Bool}
-eqSig (opIntSig _) (opIntSig _) = true
-eqSig (opStrSig _) (opStrSig _) = true
-eqSig _ _ = false
-
-peek : {Sig -> Map Sig (List X) -> Maybe X}
-peek _ mnil = nothing
-peek sig (mentry sig' xs rest) =
-    if (eqSig sig sig')
-       { case (xs)
-         { nil -> nothing
-         | (cb :: cbs) -> just cb }}
-       { peek sig rest }
-
-tail : {List X -> List X}
-tail nil = nil
-tail (x::xs) = xs
-
-pop : {Sig -> Map Sig (List X) -> Map Sig (List X)}
-pop _ mnil = mnil
-pop sig (mentry sig' xs rest) =
-    if (eqSig sig sig')
-       { mentry sig' (tail xs) rest}
-       { mentry sig' xs (pop sig rest) }
----------------- end helpers
+include helpers_cb
 
 -- Promise interface
-interface Promise =
+interface Promise [K] =
           -- promise R : Prom R [Console, Promise, RefState, Await] -> Pid R --[Console, Promise, RefState, Await]
-          promise R : Prom R [Console, Promise, RefState] -> Pid R [] --[Console, Promise, RefState, Await]
+          promise R : Prom R [K| Promise[K|], RefState, Await[K|]] -> Pid R [K|] -- [K|Promise[K|], RefState, Await[K|]]
         | signal : Sig -> Unit
 
-interface Await [J] =
-          -- await R : Pid R [Console, Promise, RefState, Await] -> R
-          await R : Pid R [J|] -> R
+interface Await [T] =
+          -- await R : Pid R [J|Promise[J|], RefState, Await[J|]] -> R
+          await R : Pid R [T|] -> R
+-- interface Await  =
+--           await R : Pid R [Promise, RefState, Await] -> R
 
 interface Tick = tick : Unit
 
@@ -57,9 +26,11 @@ data Sig = opIntSig Int | opStrSig String
 -- Pid stuff
 
 -- data PromiseStatus X [J] = empty | done X | addRes {X -> [Await[J|]] Unit}
-data PromiseStatus X [J] = empty | done X | addRes {X -> [J| Await[J|], RefState] Unit}
+-- data PromiseStatus X [J] = empty | done X | addRes {X -> [J| Await[J|], RefState] Unit}
+data PromiseStatus X [J] = empty | done X | addRes {X -> [J| Promise[J|], Await[J|], RefState] Unit}
+-- data PromiseStatus X [J] = empty | done X | addRes {X -> [Promise, Await, RefState] Unit}
 
-data Pid X [E] = pid (Ref (PromiseStatus X [E|]))
+data Pid X [O] = pid (Ref (PromiseStatus X [O|]))
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -75,7 +46,7 @@ readPid2 (pid cell) = case (read cell)
 ------------
 -- Thread code
 
-client : {[Promise , Console]Unit}
+client : {[Promise[Console], Console]Unit}
 client! = print "Starting!\n";
           let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
           -- await res;
@@ -85,7 +56,7 @@ client! = print "Starting!\n";
           print "Finished!\n";
           unit
 
-server : {Int -> [Promise, Console] Unit}
+server : {Int -> [Promise[Console], Console] Unit}
 server x = sleep 400000; signal (opIntSig x);
            sleep 400000; signal (opIntSig (x + 12));
            sleep 400000; signal (opStrSig ("yes"));
@@ -98,17 +69,25 @@ server x = sleep 400000; signal (opIntSig x);
 -- result to the cell and returns unit, whilst still performing effects as before.
 -- Adds RefState to the ambient in the promise.
 
-run : {{X -> [Await, RefState] Y} -> {X} -> [Await, RefState] Y}
-run cb arg = let res = <Await, RefState>(arg!) in
-             cb res
+-- run : {{X -> [Await, RefState] Y} -> {X} -> [Await, RefState] Y}
+-- run cb arg = let res = <Await, RefState>(arg!) in
+--              cb res
              -- unit
 
-to_write : {Pid R [E|]-> {S -> [E|]R} -> {S -> [E| Await [E|], RefState] Unit}}
+-- to_write : {Pid R [E|]-> {S -> [E|]R} -> {S -> [E| Await [E|], RefState] Unit}}
+to_write : {Pid R [E|]-> {S -> [E|Await[E|], Promise[E|],RefState]R} -> {S -> [E| Await[E|], Promise[E|], RefState] Unit}}
 to_write (pid cell) cb = {x -> case (read cell)
-                            { empty -> (write cell (done (<Await, RefState>(cb x))))
-                            | (addRes resumption) -> let res = <Await, RefState>(cb x) in
-                                                     (resumption res)
-                                                     }}
+                            { empty -> (write cell (done ((cb x))))
+                            | (addRes resumption) -> let res = (cb x) in
+                                                     let resump2 = {x -> (resumption x)} in
+                                                     -- unit
+                                                     resump2 res
+                                                     -- unit
+
+                            --                          (resumption res)
+                                                        }}
+                            -- | _ -> unit }}
+--                                                      }}
 
 -- -- Converts a function of Int -> Unit to one of Sig -> unit.
 prep_int : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
@@ -125,13 +104,17 @@ prep_str cb = {st -> case (st)
 ----------------
 -- Handlers
 
--- removeAwait : {{[Promise [K|], Await [K|], Console, RefState] Unit} -> [Promise [K|], Console, RefState]Unit}
+removeAwait : {{[E| Promise [E|], Await [E|], RefState] Unit} -> [E| Promise [E|], RefState]Unit}
 -- -- removeAwait : {{[Promise, Await, Console, RefState] Unit} -> [Promise , Console, RefState] Unit}
--- removeAwait cb = hdlAwait cb!
+removeAwait cb = hdlAwait cb!
 
 
--- hdl : {Map Sig (List {Sig -> [Promise , Console, RefState, Await]Unit})  -- Promise storer
---     -> <Promise > Unit      -- client
+-- -- hdl : {Map Sig (List {Sig -> [Promise[E|Console], Await[E|Console], Console, RefState]Unit})  -- Promise storer
+-- --     -> <Promise[E|Console] > Unit      -- client
+-- --     -> [Console, RefState] Unit}
+
+-- hdl : {Map Sig (List {Sig -> [E| Promise[E|], Await[E|], RefState]Unit})  -- Promise storer
+--     -> <Promise[E|] > Unit      -- client
 --     -> [Console, RefState] Unit}
 
 -- ----- Installing promises
@@ -139,7 +122,7 @@ prep_str cb = {st -> case (st)
 -- hdl cbs <promise (opIntCb cb) -> client> =
 --     let cell = pid (new empty) in
 --     -- look at how they massacred my boy!
---     let cbMod = prep_int (to_write cell cb) in
+--     let cbMod = prep_int ((to_write cell cb)) in
 --     hdl (snocOrInsert (opIntSig 0) cbMod cbs) (client cell)
 
 -- -- ----- same for strings
@@ -157,21 +140,22 @@ prep_str cb = {st -> case (st)
 --       { nothing -> hdl cbs (client unit)
 --       -- if there is, run it on the client's side and remove it.
 --       -- | (just cb) -> hdl (pop sig cbs) (hdlAwait (cb sig))}
---       | (just cb) -> hdl (pop sig cbs) (removeAwait (cb sig); client unit)}
 --       -- | (just cb) -> hdl (pop sig cbs) ((cb sig); client unit)}
+--       | (just cb) -> hdl (pop sig cbs) (client unit)}
 
--- -- hdl _ unit = unit
+-- -- -- hdl _ unit = unit
 
 -- Handles awaits, in the easy way.
-hdlAwait : {<Await> Unit -> [RefState]Unit}
+hdlAwait : {<Await[E|]> Unit -> [RefState]Unit}
 
 hdlAwait <await cell -> thread> =
     case (readPid cell)
       { (done x) -> hdlAwait (thread x)
-      | empty -> writePid cell (addRes {x -> (thread x)});
+      | empty -> writePid cell (addRes {x -> <Promise>(thread x)});
+                 -- writePid cell (addRes thread);
                  unit}
                 
 hdlAwait unit = unit
 
--- -- main : {[Console, RefState] Unit}
--- -- main! = hdl mnil ((<RefState>(client!)) ; <RefState>(server 10))
+-- main : {[Console, RefState] Unit}
+-- main! = hdl mnil ((<RefState>(client!)) ; <RefState>(server 10))
