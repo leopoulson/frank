@@ -9,11 +9,9 @@ interface Yield = yield : Unit
 -- Promise structures.
 
 interface Promise =
-          promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
+          promise R : Prom R [Promise, RefState] -> Pid R
         | signal : Sig -> Unit
-
-interface Await =
-          await R : Pid R [Promise, RefState] -> R
+        | await R : Pid R -> R
 
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
@@ -31,9 +29,9 @@ eqSig _ _ = false
 ----------------------------
 -- Pids
 
-data Pid X = pid (Ref (PromiseStatus X))
+data PromiseStatus X = empty | done X | addRes {X -> [Promise, RefState] Unit}
 
-data PromiseStatus X = empty | done X | addRes {X -> Unit}
+data Pid X = pid (Ref (PromiseStatus X))
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -44,7 +42,7 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Callback utilities
 
-to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write : Pid R [E|]-> {S -> [E| Promise[E|], RefState]R} -> {S -> [E| Promise[E|], RefState] Unit}
 to_write (pid cell) cb = {x -> case (read cell)
                              { empty -> write cell (done (cb x))
                              | (addRes resumption) -> resumption (cb x)}}
@@ -64,6 +62,7 @@ apply cbId threadId callback thread =
     if (cbId == threadId)
      {{callback!; thread!}}
      {thread}
+
 
 ----------------------------
 -- Threads
@@ -93,96 +92,57 @@ sleepAndYield x = if (x < 0)
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
 thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
-thread1! = print "starting"; <Yield>(waitForStop!); (counter 0)
+thread1! = print "starting"; <Yield>(waitForStop!); counter 0
 
 controller : {[Promise [Console], Console, RefState, Yield] Unit}
-controller! = print "\n*- Stop\n";
-              signal (stopSig unit);
-              print "sleeping\n";
+controller! = print "\n*- Stop\n"; signal (stopSig unit);
               sleepAndYield 400000;
               print "\n*- Go\n"; signal (goSig unit);
               sleepAndYield 400000;
               controller!
 
+
 ----------------------------
 -- Handler
 
--- hdlSgl : {Callbacks [K| Promise [K|], RefState]
---     -> <Promise[K|]> Unit -- thread
---     -> [K| RefState] Unit}
-
-hdlSgl : {Callbacks [Console, Promise [Console], RefState]
-    -> <Promise[Console]> Unit -- thread
-    -> [Console, RefState] Unit}
+hdl : {Callbacks [K| Promise [K|], RefState]
+    -> <Promise[K|]> Unit -- thread
+    -> <Promise[K|]> Unit -- controller
+    -> [K| RefState] Unit}
 
 ----- Installing Promises
-hdlSgl cbs <promise (stopCb cb) -> th1> =
-    print "stopping\n";
+hdl cbs <promise (stopCb cb) -> th1> <control> =
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to correct form
-    let cbMod = (prepStop (to_write cell cb)) in
+    let cbMod = (prepStop ((to_write cell cb))) in
     -- Add to list and resume.
-    hdlSgl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (th1 cell)
+    hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (th1 cell) control!
 
-hdlSgl cbs <promise (goCb cb) -> th1> =
+hdl cbs <promise (goCb cb) -> th1> <control> =
     let cell = pid (new empty) in
     let cbMod = prepGo (to_write cell cb) in
-    hdlSgl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (th1 cell)
+    hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (th1 cell) control!
 
 ----- Executing promises based on signals.
-hdlSgl cbs <signal sig -> th1> =
-    print "in signal\n";
+hdl cbs <th1> <signal sig -> control> =
     -- Look to see if there's any matching promises waiting.
     case (peek sig cbs)
     -- If there isn't, do nothing and carry on.
-      { nothing -> hdlSgl cbs (th1 unit)
-      | (just (pair id cb)) -> print "found\n";
-                               -- hdlSgl (pop sig cbs)
-                               hdlSgl (pop sig cbs)
-                               ((cb sig); (th1 unit))}
+      { nothing -> hdl cbs th1! (control unit)
+      | (just (pair id cb)) -> hdl (pop sig cbs)
+                                   (cb sig; th1!)
+                                   (control unit)}
 
--- hdlSgl cbs <await cell -> client> =
---     case (readPid cell)
---          { (done x) -> hdlSgl cbs (client x)
---          | empty -> writePid cell (addRes client);
---                     hdlSgl cbs unit}
-
-hdlSgl _ unit = unit
-
-hdlAwait : {<Await> Unit -> Unit}
-hdlAwait <await cell -> thread> =
+hdl cbs <await cell -> client> <server> =
     case (readPid cell)
-         { (done x) -> thread x
-         | empty    -> writePid cell (addRes client);
-                       unit}
+         { (done x) -> hdl cbs (client x) server!
+         | empty -> writePid cell (addRes client);
+                    hdl cbs unit server!}
+                   
 
--- Old yielding things!
--- hdl cbs <yield -> thr> <yield -> control> =
---     hdl cbs (thr unit) (control unit)
+-- hdl _ unit _ = print "thread1 exits"
+-- hdl _ _ unit = print "controller exits"
 
--- hdl cbs <yield -> th1> <control> =
---     hdl cbs (th1 unit) control!
-
--- hdl cbs <th1> <yield -> control> =
---     hdl cbs th1! (control unit)
-
-hdl _ unit _ = unit
-hdl _ _ unit = unit
-
-betterControl : {<Yield> Unit -> <Yield> Unit -> Unit}
--- betterControl <yield -> m> <yield -> n> = betterControl (m unit) (n unit)
-betterControl <yield -> m> <n> = betterControl n! (m unit)
-betterControl <m> <yield -> n> = betterControl (n unit) m!
-
-betterControl unit <m> = stupidYield m!
-betterControl <m> unit = stupidYield m!
-
--- If we run stupidYield on the composition of the two, we never get anywhere; the two never let the other run.
-stupidYield : {<Yield>Unit -> Unit}
-stupidYield <yield -> k> = stupidYield (k unit)
-stupidYield unit = unit
-
-main : {[Console, RefState]Unit}
-main! = hdlSgl cbnil (betterControl thread1! controller!)
--- main! = betterControl simple1! unit
+-- main : {[Console, RefState]Unit}
+-- main! = hdl cbnil thread1! controller!
