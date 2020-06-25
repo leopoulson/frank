@@ -1,0 +1,35 @@
+
+---------------- Helpers
+snocOrInsert : {Sig -> X -> Map Sig (List X) -> Map Sig (List X)}
+snocOrInsert sig x mnil = mentry sig [x] mnil
+snocOrInsert sig x (mentry sig' xs rest) =
+    if (eqSig sig sig')
+      { mentry sig' (snoc xs x) rest }
+      { mentry sig' xs (snocOrInsert sig x rest) }
+
+-- equality between signals
+eqSig : {Sig -> Sig -> Bool}
+eqSig (opIntSig _) (opIntSig _) = true
+eqSig (opStrSig _) (opStrSig _) = true
+eqSig _ _ = false
+
+peek : {Sig -> Map Sig (List X) -> Maybe X}
+peek _ mnil = nothing
+peek sig (mentry sig' xs rest) =
+    if (eqSig sig sig')
+       { case (xs)
+         { nil -> nothing
+         | (cb :: cbs) -> just cb }}
+       { peek sig rest }
+
+tail : {List X -> List X}
+tail nil = nil
+tail (x::xs) = xs
+
+pop : {Sig -> Map Sig (List X) -> Map Sig (List X)}
+pop _ mnil = mnil
+pop sig (mentry sig' xs rest) =
+    if (eqSig sig sig')
+       { mentry sig' (tail xs) rest}
+       { mentry sig' xs (pop sig rest) }
+---------------- end helpers
