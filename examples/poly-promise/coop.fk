@@ -20,6 +20,9 @@ data Sig = opIntSig Int | opStrSig String
 
 interface Yield = yield : Unit
 
+-- A request to take the current thread and retangle it with the argument.
+interface Retwine = retwine : {[Yield]Unit} -> Unit
+
 ----------------
 -- Pid stuff
 
@@ -45,18 +48,23 @@ client : {[Promise[Console], Console, Await[Console], Yield]Unit}
 client! = print "Starting!\n";
           let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n";
                                            promise (opIntCb {x -> print "running "; ouint (x + 15); print " thanks!\n"})} ) in
-          await res;
+          yield!;
+          -- await res;
+          yield!;
           let res3 = promise (opIntCb {x -> print "running "; ouint (x + 20); print " thanks!\n"; unit} ) in
+          yield!;
           let res2 = promise (opStrCb {x -> print "stringing  "; print x; print " thanks!\n"; unit} ) in
-          await res2;
+          yield!;
+          -- await res2;
+          yield!;
           print "Finished!\n";
           unit
 
 server : {Int -> [Promise[Console], Console, Yield] Unit}
-server x = sleep 400000; signal (opIntSig x);
-           sleep 400000; signal (opIntSig x);
-           sleep 400000; signal (opIntSig x);
-           sleep 400000; signal (opStrSig ("yes"));
+server x = sleep 400000; signal (opIntSig x); yield!;
+           sleep 400000; signal (opIntSig x); yield!;
+           sleep 400000; signal (opIntSig x); yield!;
+           sleep 400000; signal (opStrSig ("yes")); yield!;
            unit
 
 ----------------
@@ -89,8 +97,11 @@ prep_str cb = {st -> case (st)
 ----------------
 -- Handlers
 
--- removeAwait : {{[E | Promise[E|], Await[E|], RefState] Unit} -> [E | Promise[E|], RefState]Unit}
--- removeAwait cb = hdlAwait cb!
+removeAwait : {{[Console, Promise[Console], Await[Console], RefState] Unit} -> [Console, Promise[Console], RefState]Unit}
+removeAwait cb = hdlAwait cb!
+
+removeYield : {{[Console, Promise[Console], Await[Console], RefState, Yield]Unit } -> [Console, Promise[Console], Await[Console], RefState] Unit}
+removeYield cb = simpleYield cb!
 
 hdl : {Map Sig (List {Sig -> [Console, Promise[Console], Await[Console], RefState, Yield]Unit})  -- Promise storer
     -> <Promise[Console]> Unit      -- client
@@ -118,21 +129,20 @@ hdl cbs <signal sig -> client> =
       -- if not, do nothing and return.
       { nothing -> hdl cbs (client unit)
       -- if there is, run it on the client's side and remove it.
-      | (just cb) -> hdl (pop sig cbs) ( client unit)}
-      -- | (just cb) -> hdl (pop sig cbs) (hdlAwait (cb sig); client unit)}
+      | (just cb) -> hdl (pop sig cbs) (hdlAwait (simpleYield (cb sig)); client unit)}
 
 hdl _ unit = unit
 
 -- Handles awaits, in the easy way.
 -- Needs to be fixed at this type; I guess to guarantee that the thunked abilities match?
--- hdlAwait : {<Await[E|]> Unit -> [E | Promise[E|], RefState]Unit}
+hdlAwait : {<Await[Console]> Unit -> [Console, Promise[Console], RefState]Unit}
 
--- hdlAwait <await cell -> thread> =
---     case (<Console, Promise>(readPid cell))
---       { (done x) -> hdlAwait (thread x)
---       | empty -> (writePid cell (addRes {x -> (thread x)}));
---                  unit}
--- hdlAwait unit = unit
+hdlAwait <await cell -> thread> =
+    case (<Console, Promise>(readPid cell))
+      { (done x) -> hdlAwait (thread x)
+      | empty -> (writePid cell (addRes {x -> (<Yield>(thread x))}));
+                 unit}
+hdlAwait unit = unit
 
 
 -- Straight away handling the rest of the Yields.
@@ -144,6 +154,7 @@ hdlAwaitWithYield <await cell -> thread> =
     print "*- handling await\n";
     case (readPid cell)
       { (done x) -> hdlAwaitWithYield ((thread x))
+      -- Just store the whole thing, as before
       | empty -> (writePid cell (addRes {x -> (thread x)}));
       -- | empty -> (writePid cell (addRes {x -> (cut (<Yield(s a -> s a a)>(thread x)))}));
                  unit}
@@ -151,9 +162,6 @@ hdlAwaitWithYield <await cell -> thread> =
 
 hdlAwaitWithYield unit = unit
 
-cut : {<Yield> Unit -> Unit}
-cut <yield -> k> = unit
-cut unit = unit
 
 ----------------------------
 -- Sequencing
@@ -172,12 +180,12 @@ seq unit unit = unit
 
 
 -- Twine the two threads together.
-thread : {<Yield> Unit -> <Yield> Unit -> Unit}
-thread <yield -> m> <yield -> n> = thread (n unit) (m unit)
-thread <yield -> m> unit = thread unit (m unit)
-thread unit <yield -> m> = thread (m unit) unit
-thread unit unit = unit
+twine : {<Yield> Unit -> <Yield> Unit -> [Yield]Unit}
+twine <yield -> m> <yield -> n> = yield!; twine (n unit) (m unit)
+twine <yield -> m> <n> = yield!; twine n! (m unit)
+twine unit <yield -> m> = yield!; twine (m unit) unit
+twine unit unit = unit
 
 
--- main : {[Console, RefState] Unit}
--- main! = hdl mnil (seq (hdlAwaitWithYield (<RefState>(client!)))  (<RefState>(server 10)))
+main : {[Console, RefState] Unit}
+main! = simpleYield (hdl mnil (twine (hdlAwaitWithYield (<RefState>(client!)))  (<RefState>(server 10))))
