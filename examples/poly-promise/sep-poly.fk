@@ -5,12 +5,12 @@ include map
 include helpers_cb
 
 -- Promise interface
-interface Promise  =
-          promise R : Prom R [Console, Promise, RefState, Await] -> Pid R [Console]
+interface Promise =
+          promise R : Prom R [Promise, RefState, Await] -> Pid R
         | signal : Sig -> Unit
 
-interface Await  =
-          await R : Pid R [Console] -> R
+interface Await [E] =
+          await R : Pid R [E|] -> R
 
 interface Tick = tick : Unit
 
@@ -21,9 +21,9 @@ data Sig = opIntSig Int | opStrSig String
 ----------------
 -- Pid stuff
 
-data PromiseStatus X [E] = empty | done X | addRes {X -> [E| Promise, Await, RefState] Unit}
+data PromiseStatus X = empty | done X | addRes {X -> [Promise, Await, RefState] Unit}
 
-data Pid X [E] = pid (Ref (PromiseStatus X [E|]))
+data Pid X = pid (Ref (PromiseStatus X))
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -39,19 +39,21 @@ readPid2 (pid cell) = case (read cell)
 ------------
 -- Thread code
 
-client : {[Promise, Console, Await]Unit}
+client : {[Promise[Console], Console, Await[Console]]Unit}
 client! = print "Starting!\n";
-          let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+          let res = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n";
+                                           promise (opIntCb {x -> print "running "; ouint (x + 15); print " thanks!\n"})} ) in
           await res;
-          let res3 = promise (opIntCb {x -> print "running "; ouint (x + 10); print " thanks!\n"; unit} ) in
+          let res3 = promise (opIntCb {x -> print "running "; ouint (x + 20); print " thanks!\n"; unit} ) in
           let res2 = promise (opStrCb {x -> print "stringing  "; print x; print " thanks!\n"; unit} ) in
           await res2;
           print "Finished!\n";
           unit
 
-server : {Int -> [Promise, Console] Unit}
+server : {Int -> [Promise[Console], Console] Unit}
 server x = sleep 400000; signal (opIntSig x);
-           sleep 400000; signal (opIntSig (x + 12));
+           sleep 400000; signal (opIntSig x);
+           sleep 400000; signal (opIntSig x);
            sleep 400000; signal (opStrSig ("yes"));
            unit
 
@@ -62,7 +64,7 @@ server x = sleep 400000; signal (opIntSig x);
 -- result to the cell and returns unit, whilst still performing effects as before.
 -- Adds RefState to the ambient in the promise.
 
-to_write : {Pid R [Console]-> {S -> [Await, Promise, RefState, Console]R} -> {S -> [Await, Promise, RefState, Console] Unit}}
+to_write : {Pid R [E|]-> {S -> [E| Await[E|], Promise[E|], RefState]R} -> {S -> [E| Await[E|], Promise[E|], RefState] Unit}}
 to_write (pid cell) cb = {x -> case (read cell)
                             { empty -> (write cell (done ((cb x))))
                             | (addRes resumption) -> let res = (cb x) in
@@ -85,26 +87,25 @@ prep_str cb = {st -> case (st)
 ----------------
 -- Handlers
 
-removeAwait : {{[Promise, Await, Console, RefState] Unit} -> [Promise, Console, RefState]Unit}
+removeAwait : {{[E | Promise[E|], Await[E|], RefState] Unit} -> [E | Promise[E|], RefState]Unit}
 removeAwait cb = hdlAwait cb!
 
-
-hdl : {Map Sig (List {Sig -> [Promise, Await, Console, RefState]Unit})  -- Promise storer
-    -> <Promise > Unit      -- client
-    -> [Console, RefState] Unit}
+hdl : {Map Sig (List {Sig -> [E| Promise[E|], Await[E|], RefState]Unit})  -- Promise storer
+    -> <Promise[E|] > Unit      -- client
+    -> [E| RefState] Unit}
 
 ----- Installing promises
 ----- cbMod is the original callback, modified to make its input and return types generic.
 hdl cbs <promise (opIntCb cb) -> client> =
     let cell = pid (new empty) in
     -- look at how they massacred my boy!
-    let cbMod = prep_int (<Console, RefState>(to_write cell cb)) in
+    let cbMod = prep_int ((to_write cell cb)) in
     hdl (snocOrInsert (opIntSig 0) cbMod cbs) (client cell)
 
------ same for strings
+-- ----- same for strings
 hdl cbs <promise (opStrCb cb) -> client> =
     let cell = pid (new empty) in
-    let cbMod = prep_str (<Console, RefState>(to_write cell cb)) in
+    let cbMod = prep_str ((to_write cell cb)) in
     hdl (snocOrInsert (opStrSig "") cbMod cbs) (client cell)
 
 
@@ -119,13 +120,14 @@ hdl cbs <signal sig -> client> =
 
 hdl _ unit = unit
 
--- -- Handles awaits, in the easy way.
-hdlAwait : {<Await> Unit -> [Promise, Console, RefState]Unit}
+-- Handles awaits, in the easy way.
+-- Needs to be fixed at this type; I guess to guarantee that the thunked abilities match?
+hdlAwait : {<Await[E|]> Unit -> [E | Promise[E|], RefState]Unit}
 
 hdlAwait <await cell -> thread> =
     case (<Console, Promise>(readPid cell))
       { (done x) -> hdlAwait (thread x)
-      | empty -> <Console, Promise>(writePid cell (addRes {x -> (thread x)}));
+      | empty -> (writePid cell (addRes {x -> (thread x)}));
                  unit}
 hdlAwait unit = unit
 
