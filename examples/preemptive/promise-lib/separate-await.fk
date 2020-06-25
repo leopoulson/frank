@@ -9,11 +9,11 @@ interface Yield = yield : Unit
 -- Promise structures.
 
 interface Promise =
-          promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
+          promise R : Prom R [Promise, RefState, Await] -> Pid R [Promise, RefState, Await]
         | signal : Sig -> Unit
 
 interface Await =
-          await R : Pid R [Promise, RefState] -> R
+          await R : Pid R [Promise, RefState, Await] -> R
 
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
@@ -93,9 +93,9 @@ sleepAndYield x = if (x < 0)
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
 thread1 : {[Promise[Console], Await [Console], Console, RefState, Yield] Unit}
-thread1! = print "starting"; <Yield>(waitForStop!); (counter 0)
+thread1! = print "starting"; <Yield>(waitForStop!); counter 0
 
-controller : {[Promise [Console], Await [Console], Console, RefState, Yield] Unit}
+controller : {[Promise [Console], Console, RefState, Yield] Unit}
 controller! = print "\n*- Stop\n";
               signal (stopSig unit);
               print "sleeping\n";
@@ -111,8 +111,8 @@ controller! = print "\n*- Stop\n";
 --     -> <Promise[K|]> Unit -- thread
 --     -> [K| RefState] Unit}
 
-hdlSgl : {Callbacks [Console, Promise [Console], RefState]
-    -> <Promise[Console]> Unit -- thread
+hdlSgl : {Callbacks [Console, Promise [Console], Await[Console], RefState]
+    -> <Promise[Console], Await[Console]> Unit -- thread
     -> [Console, RefState] Unit}
 
 ----- Installing Promises
@@ -138,38 +138,32 @@ hdlSgl cbs <signal sig -> th1> =
     -- If there isn't, do nothing and carry on.
       { nothing -> hdlSgl cbs (th1 unit)
       | (just (pair id cb)) -> print "found\n";
-                               -- hdlSgl (pop sig cbs)
                                hdlSgl (pop sig cbs)
                                ((cb sig); (th1 unit))}
 
--- hdlSgl cbs <await cell -> client> =
---     case (readPid cell)
---          { (done x) -> hdlSgl cbs (client x)
---          | empty -> writePid cell (addRes client);
---                     hdlSgl cbs unit}
+hdlSgl cbs <await cell -> client> =
+    case (readPid cell)
+         { (done x) -> hdlSgl cbs (client x)
+         | empty -> writePid cell (addRes client);
+                    hdlSgl cbs unit}
 
 hdlSgl _ unit = unit
 
-hdlAwait : {<Await> Unit -> Unit}
+
+
+-- We label promise in the type, but never actually handle any promise commands.
+-- We just let these pass up to the higher one.
+hdlAwait : {<Await> Unit -> [RefState]Unit}
+
 hdlAwait <await cell -> thread> =
     case (readPid cell)
-         { (done x) -> thread x
-         | empty    -> writePid cell (addRes client);
-                       unit}
+         { (done x) -> hdlAwait (thread x)
+         -- Applyign the adaptor to the thread, when executed.
+         | empty    -> writePid cell (addRes {x -> <Promise>(thread x)});
+                       unit }
+
 hdlAwait unit = unit
 
--- Old yielding things!
--- hdl cbs <yield -> thr> <yield -> control> =
---     hdl cbs (thr unit) (control unit)
-
--- hdl cbs <yield -> th1> <control> =
---     hdl cbs (th1 unit) control!
-
--- hdl cbs <th1> <yield -> control> =
---     hdl cbs th1! (control unit)
-
-hdl _ unit _ = unit
-hdl _ _ unit = unit
 
 betterControl : {<Yield> Unit -> <Yield> Unit -> Unit}
 -- betterControl <yield -> m> <yield -> n> = betterControl (m unit) (n unit)
@@ -184,6 +178,14 @@ stupidYield : {<Yield>Unit -> Unit}
 stupidYield <yield -> k> = stupidYield (k unit)
 stupidYield unit = unit
 
+th : {[Promise[Console], Await[Console], RefState, Console, Yield] Unit}
+th! = thread1!
+
+one : {[Promise[Console], Console, RefState, Yield] Unit}
+one! = hdlAwait (th1!)
+
+-- between : {[Promise[Console], Console, RefState] Unit}
+-- between! = betterControl (<Console>(hdlAwait (thread1!))) unit
+
 -- main : {[Console, RefState]Unit}
--- main! = hdlSgl cbnil (betterControl thread1! controller!)
--- main! = betterControl simple1! unit
+-- main! = hdlSgl cbnil (betterControl (hdlAwait(thread1!)) (<Await>(controller!)))
