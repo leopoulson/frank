@@ -190,23 +190,23 @@ hdl cbs <th1> <th2> <signal sig -> control> =
         ((applyMany 1 sig th2 cbsHere)!)
         (control unit)
 
-hdl cbs <yield -> th1> <yield -> th2> <yield -> control> =
-    hdl cbs (th1 unit) (th2 unit) (control unit)
+-- hdl cbs <yield -> th1> <yield -> th2> <yield -> control> =
+--     hdl cbs (th1 unit) (th2 unit) (control unit)
 
-hdl cbs <yield -> th1> <th2> <yield -> control> =
-    hdl cbs (th1 unit) th2! (control unit)
+-- hdl cbs <yield -> th1> <th2> <yield -> control> =
+--     hdl cbs (th1 unit) th2! (control unit)
 
-hdl cbs <th1> <yield -> th2> <yield -> control> =
-    hdl cbs th1! (th2 unit) (control unit)
+-- hdl cbs <th1> <yield -> th2> <yield -> control> =
+--     hdl cbs th1! (th2 unit) (control unit)
 
-hdl cbs <yield -> th1> <th2> <control> =
-    hdl cbs (th1 unit) th2! control!
+-- hdl cbs <yield -> th1> <th2> <control> =
+--     hdl cbs (th1 unit) th2! control!
 
-hdl cbs <th1> <yield -> th2> <control> =
-    hdl cbs th1! (th2 unit) control!
+-- hdl cbs <th1> <yield -> th2> <control> =
+--     hdl cbs th1! (th2 unit) control!
 
-hdl cbs <th1> <th2> <yield -> control> =
-    hdl cbs th1! th2! (control unit)
+-- hdl cbs <th1> <th2> <yield -> control> =
+--     hdl cbs th1! th2! (control unit)
 
 hdl _ unit _ _ = print "thread1 exits"
 hdl _ _ unit _ = print "thread2 exits"

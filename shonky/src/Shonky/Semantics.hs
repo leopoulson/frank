@@ -36,7 +36,9 @@ data Val
   | Val :&& Val                                                             -- cons
   | VX String                                                               -- string
                                                                             -- (except really just single characters)
-  | VF Env [([Adap], [String])] [([Pat], Exp)]                              -- function (anonymous), has environment, for each port: list of adaptors + list of commands to be captured, list of patterns + handling expressions
+  | VF Env [([Adap], [String])] [([Pat], Exp)]
+  -- function (anonymous), has environment, for each port: list of adaptors +
+  -- list of commands to be captured, list of patterns + handling expressions
   | VB String Env                                                           -- built-in function
   | VC Comp                                                                 -- comp
   | VR (IORef Val)                                                          -- reference cell
@@ -233,7 +235,7 @@ args f cs g (hs : hss) (e : es) ls = compute g e
 -- `apply` is called by `args` when all arguments are evaluated
 -- given: eval. operator, eval. args, frame stack
 apply :: Val -> [Comp] -> Agenda -> Count Comp
-apply (VF g _ pes) cs ls = tryRules g pes cs ls                             -- apply function to evaluated args `cs`
+apply (VF g adps pes) cs ls = tryRules (EF adps pes) g pes cs ls                             -- apply function to evaluated args `cs`
 apply (VB x g) cs ls = case M.lookup x builtins of                          -- apply built-in fct. to evaluated args `cs`
   Just f -> consume (f g cs) ls
   Nothing -> error $ concat ["apply: ", x, " not a builtin"]
@@ -273,13 +275,72 @@ command c vs ks n (Adp (cs, r) : ls)
   | c `elem` cs = command c vs (Adp (cs, r) : ks) (renToFun r n) ls         -- if there is an adaptor frame: apply adaptor and recurse
 command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- skip current handler `k` and recurse
 
+
+
 -- given:  env, rules, evaluated args, frame stack
 -- selects first rule that matches and computes that expression
-tryRules :: Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
-tryRules g [] cs ls = command "abort" [] [] 0 ls                            -- no rule matches
-tryRules g ((ps, e) : pes) cs ls = case matches g ps cs of
+tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
+-- TODO: Perhaps invoking abort is not the correct way to fail
+-- We want to express that there is no matching rule for the incoming messages?
+tryRules f g [] cs ls =
+  if (hasYields cs)
+     then -- trace ("has yields!") $
+          let (gUpdated, expargs) = makeTerm 0 cs g [] in
+            -- trace (show args ++ "\n") $
+            compute gUpdated (f :$ expargs) ls
+     else command "abort" [] [] 0 ls
+tryRules f g ((ps, e) : pes) cs ls = case matches g ps cs of
   Just g  -> compute g e ls                                                 -- rule matches, compute
-  Nothing -> tryRules g pes cs ls                                           -- rule fails, try next
+  Nothing -> tryRules f g pes cs ls                                           -- rule fails, try next
+
+hasYields :: [Comp] -> Bool
+hasYields = any isYield
+  where
+    -- no values
+    isYield (Call "yield" _ _ _) = True
+    isYield _ = False
+
+-- uncreative
+freshName :: Int -> String
+freshName n = "`fresh" ++ show n
+
+-- Given an initial env and a list of Comps, make a modified environment with
+-- the list of arguments.
+-- TODO rewrite this to look nicer
+makeTerm :: Int -> [Comp] -> Env -> [Exp] -> (Env, [Exp])
+makeTerm _ [] g exps = (g, exps)
+makeTerm l (c:cs) g exps = makeTerm (l + 1) cs g' (exps ++ [newExp])
+  where
+    (g', newExp) = makeExp l c g
+
+
+-- Given a position - for fresh names - and a comp, return the updated env and
+-- the corresponding exp
+makeExp :: Int -> Comp -> Env -> (Env, Exp)
+-- So for a value, we create a fresh name and bind the value to this?
+makeExp n (Ret v) g = let name = freshName n in (g :/ [name := v], EV name)
+-- For a yield, we know that vs will always be empty (it's 0-ary)
+-- Then we just bind the continuations to the name, in env,
+-- and call it in the expression.
+makeExp n (Call "yield" _ [] ks) g =
+  let name = freshName n in
+    -- apply `unit` to name.
+    (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
+-- If it's any other sort of call, bind the name to the call in the env, and
+-- invoke the cont. 0-arily.
+makeExp n call@(Call _ _ _ _) g =
+  let name = freshName n in
+    (g :/ [name := VC call], EV name :$ [])
+
+
+matchYield :: Env -> Pat -> Comp -> Env
+matchYield g (PT x) (Call "yield" _ _ _) = trace ("PT " ++ show x ++ "\n") $ g
+matchYield g (PC _ _ _ x) (Call "yield" _ _ _) = trace ("PC " ++ show x ++ "\n") $ g
+
+-- matching on anything that's not a yield just returns env
+matchYield g _ (Call _ _ _ _) = g
+matchYield g _ (Ret _) = g
+
 
 -- given:   env `g`, list of patterns, list of comps
 -- returns: `g` extended by bindings on match
