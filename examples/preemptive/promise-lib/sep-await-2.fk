@@ -1,0 +1,239 @@
+include std
+
+include callbacks
+
+-- Yielding needed for pre-emption to work.
+interface Yield = yield : Unit
+
+----------------------------
+-- Promise structures.
+
+interface Promise =
+          -- promise R : Prom R [Promise, RefState] -> Pid R
+          promise R : Prom R [Promise, Await, RefState, Yield] -> Pid R
+        | signal : Sig -> Unit
+
+interface Await =
+          await R : Pid R -> R
+
+data Prom R [E] = goCb {Unit -> [E|] R}
+                | stopCb {Unit -> [E|] R}
+
+-- data Callbacks [E] = callbacks (Map Sig (List (Pair Int {Sig -> [E|]Unit})))
+
+data Sig = goSig Unit | stopSig Unit
+
+eqSig : {Sig -> Sig -> Bool}
+eqSig (goSig _) (goSig _) = true
+eqSig (stopSig _) (stopSig _) = true
+eqSig _ _ = false
+
+
+----------------------------
+-- Pids
+
+data PromiseStatus X = empty | done X | addRes {X -> [Promise, Await, RefState, Yield] Unit}
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E|]-> {S -> [E| Promise[E|], Await[E|], RefState, Yield]R} -> {S -> [E| Promise[E|], Await[E|], RefState, Yield] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepStop : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepStop cb = {s -> case (s)
+                   { (stopSig x) -> cb x
+                   | _ -> unit}}
+
+prepGo : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepGo cb = {s -> case (s)
+                   { (goSig x) -> cb x
+                   | _ -> unit}}
+
+apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
+apply cbId threadId callback thread =
+    if (cbId == threadId)
+     {{callback!; thread!}}
+     {thread}
+
+
+----------------------------
+-- Threads
+
+counter : {Int -> [Console, Yield]Unit}
+counter x = ouint x; print " ";
+            sleep 200000;
+            yield!;
+            counter (x + 1)
+
+-- Install an interrupt handler for stopping.
+waitForStop : {[Console, Promise[Console], Await[Console], RefState, Yield]Unit}
+waitForStop! =
+    promise (stopCb { _ ->
+                       print "stop triggered\n";
+                       -- When we receive stop, we stop; so we install go and
+                       -- block on it.
+                       let goPromise = promise (goCb {_ -> print "go triggered"; unit}) in
+                       await goPromise;
+                       print "await resumed\n";
+                       -- Once go has been sent, we allow the thread to continue
+                       -- computing and reinstall the stop waiter.
+                       waitForStop!})
+    ; unit
+
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+thread1 : {[Promise[Console], Await[Console], Console, RefState, Yield] Unit}
+-- thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
+thread1! = print "starting"; (waitForStop!); print "installed"; counter 0
+
+controller : {[Promise [Console], Console, RefState, Yield] Unit}
+controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
+              sleepAndYield 400000;
+              print "\n*- Go\n"; signal (goSig unit);
+              sleepAndYield 400000;
+              controller!
+
+
+----------------------------
+-- Handler
+
+
+-- twined : {{[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit}}
+-- twined cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
+
+
+-- hdl : {Callbacks [Console, Promise [Console], Await [Console], RefState, Yield]
+--     -> <Promise[Console]> Unit -- thread
+--     -- -> [Yield, Console, RefState] Unit}
+--     -> [Yield, Console, RefState] Unit}
+-- -- -- hdl : {Callbacks [K| Promise [K|], Await [K|], RefState]
+-- -- --     -> <Promise[K|]> Unit -- thread
+-- -- --     -> [K| RefState] Unit}
+
+
+-- ----- Installing Promises
+-- hdl cbs <promise (stopCb cb) -> thr>  =
+--     -- Create new pid cell
+--     let cell = pid (new empty) in
+--     -- Process callback to convert to correct form
+--     let cbMod = (prepStop ((to_write cell cb))) in
+--     -- Add to list and resume.
+--     hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
+
+-- hdl cbs <promise (goCb cb) -> thr> =
+--     let cell = pid (new empty) in
+--     let cbMod = prepGo (to_write cell cb) in
+--     hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
+
+-- ----- Executing promises based on signals.
+-- hdl cbs <signal sig -> thr> =
+--     -- Look to see if there's any matching promises waiting.
+--     print "msg in";
+--     case (peek sig cbs)
+--     -- If there isn't, do nothing and carry on.
+--       { nothing -> hdl cbs (thr unit)
+--       | (just (pair id cb)) -> hdl (pop sig cbs)
+--                                    -- (hdlAwait (cb sig); thr unit)}
+--                                    -- (hdlAwait (cb sig);
+--                                    (thr unit)}
+--                                    -- ((cb sig); thr unit)}
+--                                    -- (thr unit)}
+
+-- hdl _ unit = unit
+
+
+
+-- -- hdlAwait : {<Await[E|]> Unit -> [E | Promise[E|], RefState]Unit}
+-- hdlAwait : {<Await[Console]> Unit -> [Console, Promise[Console], RefState]Unit}
+
+-- hdlAwait <await cell -> thread> =
+--     print "installing await\n";
+--     case (readPid cell)
+--       { (done x) -> hdlAwait (thread x)
+--       | empty -> print "suspending\n";
+--                  (writePid cell (addRes {x -> print "fulfilled"; (thread x)}));
+--                  unit}
+
+-- hdlAwait unit = unit
+
+
+
+
+-- Straight away handling the rest of the Yields.
+-- This won't work, because the rest of it never gets put back in?
+-- hdlAwaitWithYield : {<Await[E|]> Unit -> [E | Yield, Promise[E|], RefState]Unit}
+-- hdlAwaitWithYield : {<Await[Console]> Unit -> [Console,  Yield, Promise[Console], RefState]Unit}
+
+-- hdlAwaitWithYield <await cell -> thread> =
+--     print "*- handling await\n";
+--     case (readPid cell)
+--       { (done x) -> hdlAwaitWithYield ((thread x))
+--       | empty -> (writePid cell (addRes {x -> (thread x)}));
+--                  unit}
+
+
+-- hdlAwaitWithYield unit = unit
+
+
+-- ----------------------------
+-- -- Sequencing
+
+-- Unary, just resume.
+simpleYield : {<Yield> Unit -> Unit}
+simpleYield <yield -> k> = simpleYield (k unit)
+simpleYield unit = unit
+
+-- Run the first until it's over, then run the second.
+seq : {<Yield> Unit -> <Yield> Unit -> Unit}
+seq <yield -> k> <m> = seq (k unit) m!
+seq unit <m> = seq m! unit
+seq unit unit = unit
+
+-- Twine the two threads together.
+
+twine : {<Yield> Unit -> <Yield> Unit -> [Console, Yield]Unit}
+twine <yield -> m> <yield -> n> = print "1"; yield!; twine (n unit) (m unit)
+twine <yield -> m> <n> = print "2"; yield!; twine n! (m unit)
+twine unit <yield -> m> = print "3"; yield!; twine (m unit) unit
+twine unit unit = unit
+
+twine2 : {<Yield> Unit -> <Yield> Unit -> {[Yield]Unit}}
+twine2 <yield -> m> <n> = {yield!; (twine2 n! (m unit))!}
+twine2 unit <yield -> m> = {yield!; (twine2 (m unit) unit)!}
+twine2 unit unit = unit
+
+twiner1 : {[Console, Yield]Unit}
+twiner1! = print "a"; yield!; print "b"; yield!; print"c"; yield!
+
+twiner2 : {[Console, Yield]Unit}
+twiner2! = print "1"; yield!; print "2"; yield!; print"3"; yield!
+
+main : {[Console, Yield] Unit}
+main! = (simpleYield (twine2 twiner1! twiner2!))!
+
+-- ----------------------------
+-- -- Executing
+
+
+-- two : {[Promise[Console], Console, Yield, RefState] Unit}
+-- two! = hdlAwaitWithYield (thread1!)
+
+-- three : {[Await[Console], Console, Promise[Console], RefState, Yield] Unit}
+-- three! = (twine2 (thread1!) twiner2!)
+
+-- main : {[Console, RefState]Unit}
+-- main! = simpleYield (hdl cbnil ((three!)))

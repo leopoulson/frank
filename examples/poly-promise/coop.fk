@@ -107,8 +107,8 @@ removeYield cb = simpleYield cb!
 twined : {{[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit}}
 twined cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
 
-twined2 : {{[E|Yield] Unit} -> {[E|Yield] Unit} -> {[E|Yield] Unit}}
-twined2 cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
+-- twined2 : {{[E|Yield] Unit} -> {[E|Yield] Unit} -> {[E|Yield] Unit}}
+-- twined2 cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
 
 hdl : {Map Sig (List {Sig -> [Console, Promise[Console], Await[Console], RefState, Yield]Unit})  -- Promise storer
     -> <Promise[Console]> Unit      -- client
@@ -137,17 +137,8 @@ hdl cbs <signal sig -> client> =
       { nothing -> hdl cbs (client unit)
       -- if there is, run it on the client's side and remove it.
       | (just cb) ->
-                     --let newThread = {hdlAwaitWithYield (cb sig)} in
-                     -- let twined = {twine newThread {client unit}} in
-                     -- hdl (pop sig cbs) (twine (hdlAwaitWithYield (cb sig)) {<Yield>(client unit)}) }
-                    
-                     -- hdl (pop sig cbs) ((twined ( {<Yield>(hdlAwaitWithYield (cb sig))}) unit)!) }
-                     hdl (pop sig cbs) ((<Yield, RefState, Promise, Console>(twined {hdlAwaitWithYield (cb sig)} {client unit}))!) }
-                     -- hdl (pop sig cbs) ((twined2 {hdlAwaitWithYield (cb sig)} {client unit}))!}
-                     --  hdl (pop sig cbs)
-                     -- (hdlAwait (simpleYield (cb sig)); client unit)}
-
-                     -- unit}
+                     hdl (pop sig cbs)
+                     ((<Yield, RefState, Promise, Console>(twined {hdlAwaitWithYield (cb sig)} {client unit}))!) }
 
 hdl _ unit = unit
 
@@ -198,15 +189,15 @@ seq unit unit = unit
 
 
 -- Twine the two threads together.
-twine : {<Yield> Unit -> <Yield> Unit -> [Yield]Unit}
-twine <yield -> m> <yield -> n> = yield!; twine (n unit) (m unit)
-twine <yield -> m> <n> = yield!; twine n! (m unit)
-twine unit <yield -> m> = yield!; twine (m unit) unit
+twine : {<Yield> Unit -> <Yield> Unit -> [Console, Yield]Unit}
+twine <yield -> m> <yield -> n> = print "a"; yield!; twine (n unit) (m unit)
+twine <yield -> m> <n> = print "b"; yield!; twine n! (m unit)
+twine unit <yield -> m> = print "c"; yield!; twine (m unit) unit
 twine unit unit = unit
 
 ok : {[Console, RefState, Yield]Unit}
 -- ok! = hdl mnil (twine (hdlAwaitWithYield (<RefState>(client!)))  (<RefState>(server 10)))
-ok! = hdl mnil ((twine (<Yield>(hdlAwaitWithYield (<RefState> (client!))))  (<RefState, Yield> (server 10))))
+ok! = hdl mnil ((twine ((hdlAwaitWithYield (<RefState> (client!))))  (<RefState, Yield> (server 10))))
 
 main : {[Console, RefState] Unit}
 main! = simpleYield ok!
