@@ -235,6 +235,8 @@ args f cs g (hs : hss) (e : es) ls = compute g e
 -- `apply` is called by `args` when all arguments are evaluated
 -- given: eval. operator, eval. args, frame stack
 apply :: Val -> [Comp] -> Agenda -> Count Comp
+-- Call tryRules with the function being applied now - in case all of the
+-- matches fail and we need to reinvoke w/ yield
 apply (VF g adps pes) cs ls = tryRules (EF adps pes) g pes cs ls                             -- apply function to evaluated args `cs`
 apply (VB x g) cs ls = case M.lookup x builtins of                          -- apply built-in fct. to evaluated args `cs`
   Just f -> consume (f g cs) ls
@@ -276,43 +278,37 @@ command c vs ks n (Adp (cs, r) : ls)
 command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- skip current handler `k` and recurse
 
 
-
 -- given:  env, rules, evaluated args, frame stack
 -- selects first rule that matches and computes that expression
-tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
 -- TODO: Perhaps invoking abort is not the correct way to fail
 -- We want to express that there is no matching rule for the incoming messages?
-tryRules f g [] cs ls =
-  if (hasYields cs)
-     then -- trace ("has yields!") $
-          let (gUpdated, expargs) = makeTerm 0 cs g [] in
-            -- trace (show args ++ "\n") $
-            compute gUpdated (f :$ expargs) ls
-     else command "abort" [] [] 0 ls
+tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
+-- If any of the comps are yields;
+tryRules f g [] cs ls = if (any isYield cs)
+  -- Make arguments for the passed-in function, which is the one being
+  -- performed, and reinvoke it
+  then let (gUpdated, expargs) = makeArgs g cs in
+       compute gUpdated (f :$ expargs) ls
+  -- if not, abort as before.
+  else command "abort" [] [] 0 ls
+  where
+    isYield (Call "yield" _ _ _) = True
+    isYield _ = False
 tryRules f g ((ps, e) : pes) cs ls = case matches g ps cs of
   Just g  -> compute g e ls                                                 -- rule matches, compute
   Nothing -> tryRules f g pes cs ls                                           -- rule fails, try next
 
-hasYields :: [Comp] -> Bool
-hasYields = any isYield
-  where
-    -- no values
-    isYield (Call "yield" _ _ _) = True
-    isYield _ = False
-
--- uncreative
+-- uncreative, but backticks aren't valid in names, so it's safe
 freshName :: Int -> String
 freshName n = "`fresh" ++ show n
 
--- Given an initial env and a list of Comps, make a modified environment with
--- the list of arguments.
--- TODO rewrite this to look nicer
-makeTerm :: Int -> [Comp] -> Env -> [Exp] -> (Env, [Exp])
-makeTerm _ [] g exps = (g, exps)
-makeTerm l (c:cs) g exps = makeTerm (l + 1) cs g' (exps ++ [newExp])
+-- Given a list of computation patterns and an environment, convert these into
+-- shonky arguments with the env updated w/ relevant bindings.
+makeArgs :: Env -> [Comp] -> (Env, [Exp])
+makeArgs g comps = foldr maker (g, []) (zip [0..] comps)
   where
-    (g', newExp) = makeExp l c g
-
+    maker (index, comp) (g, exps) = onSnd (: exps) (makeExp index comp g)
+    onSnd f (a, b) = (a, f b)
 
 -- Given a position - for fresh names - and a comp, return the updated env and
 -- the corresponding exp
@@ -328,18 +324,9 @@ makeExp n (Call "yield" _ [] ks) g =
     (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
 -- If it's any other sort of call, bind the name to the call in the env, and
 -- invoke the cont. 0-arily.
-makeExp n call@(Call _ _ _ _) g =
+makeExp n call g =
   let name = freshName n in
     (g :/ [name := VC call], EV name :$ [])
-
-
-matchYield :: Env -> Pat -> Comp -> Env
-matchYield g (PT x) (Call "yield" _ _ _) = trace ("PT " ++ show x ++ "\n") $ g
-matchYield g (PC _ _ _ x) (Call "yield" _ _ _) = trace ("PC " ++ show x ++ "\n") $ g
-
--- matching on anything that's not a yield just returns env
-matchYield g _ (Call _ _ _ _) = g
-matchYield g _ (Ret _) = g
 
 
 -- given:   env `g`, list of patterns, list of comps
