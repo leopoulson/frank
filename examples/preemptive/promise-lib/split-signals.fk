@@ -10,7 +10,9 @@ interface Yield = yield : Unit
 
 interface Promise =
           promise R : Prom R [Console, Promise, Await, RefState, Yield] -> Pid R
-        | signal : Sig -> Unit
+
+interface Signal =
+          signal : Sig -> Unit
 
 interface Await =
           await R : Pid R -> R
@@ -96,7 +98,7 @@ sleepAndYield x = if (x < 0)
 thread1 : {[Promise, Await, Console, RefState, Yield] Unit}
 thread1! = print "starting"; (waitForStop!); print "installed"; counter 0
 
-controller : {[Promise, Console, RefState, Yield] Unit}
+controller : {[Promise, Console, RefState, Yield, Signal] Unit}
 controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
               sleepAndYield 400000;
               print "\n*- Go\n"; signal (goSig unit);
@@ -108,52 +110,93 @@ controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
 -- Handler
 
 
-hdl : {Callbacks [Console, Promise, Await , RefState, Yield]
-    -> <Promise> Unit -- thread
-    -> [Yield, Console, RefState] Unit}
+-- hdl : {Callbacks [Console, Promise, Await , RefState, Yield]
+--     -> <Promise> Unit -- thread
+--     -> [Yield, Console, RefState] Unit}
 
------ Installing Promises
-hdl cbs <promise (stopCb cb) -> thr>  =
+-- ----- Installing Promises
+-- hdl cbs <promise (stopCb cb) -> thr>  =
+--     -- Create new pid cell
+--     let cell = pid (new empty) in
+--     -- Process callback to convert to correct form
+--     let cbMod = (prepStop ((to_write cell cb))) in
+--     -- Add to list and resume.
+--     hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
+
+-- hdl cbs <promise (goCb cb) -> thr> =
+--     let cell = pid (new empty) in
+--     let cbMod = prepGo (to_write cell cb) in
+--     hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
+
+-- ----- Executing promises based on signals.
+-- hdl cbs <signal sig -> thr> =
+--     -- Look to see if there's any matching promises waiting.
+--     case (peek sig cbs)
+--     -- If there isn't, do nothing and carry on.
+--       { nothing -> hdl cbs (thr unit)
+--       | (just (pair id cb)) ->
+--                                hdl (pop sig cbs)
+--                                (twine (<Yield(s a a -> s a)>(hdlAwaitWithYield (cb sig)))
+--                                       (<Yield(s a a -> s a)>(thr unit))) }
+
+-- hdl _ unit = unit
+
+-----------
+-- Installing promises
+installPromises : {Callbacks [Console, Promise, Await, RefState, Yield]
+                -> <Promise> Unit -- thread
+                -> [RefState, Console, Yield] Callbacks [Console, Promise, Await, RefState, Yield]}
+
+installPromises cbs <promise (stopCb cb) -> thr> =
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to correct form
     let cbMod = (prepStop ((to_write cell cb))) in
     -- Add to list and resume.
-    hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
+    installPromises (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
 
-hdl cbs <promise (goCb cb) -> thr> =
+installPromises cbs <promise (goCb cb) -> thr> =
     let cell = pid (new empty) in
     let cbMod = prepGo (to_write cell cb) in
-    hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
+    installPromises (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
 
------ Executing promises based on signals.
-hdl cbs <signal sig -> thr> =
-    -- Look to see if there's any matching promises waiting.
-    case (peek sig cbs)
-    -- If there isn't, do nothing and carry on.
-      { nothing -> hdl cbs (thr unit)
-      | (just (pair id cb)) ->
-                               hdl (pop sig cbs)
-                               (twine (<Yield(s a a -> s a)>(hdlAwaitWithYield (cb sig)))
-                                      (<Yield(s a a -> s a)>(thr unit))) }
+-- Returning
+installPromises cbs unit = cbs
 
-hdl _ unit = unit
+-----------
+-- Installing awaits
+hdlAwait : {<Await> Unit -> [Console, Yield, Promise, RefState]Unit}
 
-
-
--- Straight away handling the rest of the Yields.
-hdlAwaitWithYield : {<Await> Unit -> [Console, Yield, Promise, RefState]Unit}
-
-hdlAwaitWithYield <await cell -> thread> =
+hdlAwait <await cell -> thread> =
     print "*- handling await\n";
     case (readPid cell)
-      { (done x) -> print "*- await done\n"; hdlAwaitWithYield ((thread x))
+      { (done x) -> print "*- await done\n"; hdlAwait ((thread x))
       | empty -> print "*- blocking\n";
                  (writePid cell (addRes {x -> (thread x)}));
                  unit}
 
 
-hdlAwaitWithYield unit = unit
+hdlAwait unit = unit
+
+-- ----------------------------
+-- -- Executing
+
+one : {[Console, Yield, RefState] Unit}
+one! = (installPromises cbnil (hdlAwait (thread1!))); unit
+-- one! = (installPromises cbnil ((thread1!)))
+
+-- main : {[Console, RefState] Unit}
+-- main! = simpleYield (hdlAwait (installPromises thread1!))
+
+-- three : {[Console, Promise, RefState, Yield] Unit}
+-- three! = twine (<Yield(s a a -> s a)> (hdlAwait thread1!))
+--                (<Yield(s a a -> s a)> controller!)
+
+-- five : {[Yield, Console, RefState] Unit}
+-- five! = hdl cbnil three!
+
+-- main : {[Console, RefState] Unit}
+-- main! = simpleYield five!
 
 
 -- ----------------------------
@@ -184,17 +227,5 @@ twine <yield -> m> <n> = yield!; twine n! (m unit)
 twine unit <yield -> m> = yield!; twine (m unit) unit
 twine unit unit = unit
 
--- ----------------------------
--- -- Executing
-
-
-three : {[Console, Promise, RefState, Yield] Unit}
-three! = twine (<Yield(s a a -> s a)> (hdlAwaitWithYield thread1!))
-               (<Yield(s a a -> s a)> controller!)
-
-five : {[Yield, Console, RefState] Unit}
-five! = hdl cbnil three!
-
-main : {[Console, RefState] Unit}
-main! = simpleYield five!
-
+twine_cb : {<Yield> Callbacks [E|] -> <Yield> Callbacks [E|] -> [Yield] Callbacks [E|]}
+twine_cb <
