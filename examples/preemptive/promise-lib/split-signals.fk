@@ -141,6 +141,10 @@ controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
 
 -- hdl _ unit = unit
 
+handleSignals : {Callbacks [Console, Promise, Await, RefState, Yield]
+              -> <Signal> Unit
+              -> [Console, RefState] Unit}
+
 -----------
 -- Installing promises
 installPromises : {Callbacks [Console, Promise, Await, RefState, Yield]
@@ -228,4 +232,7 @@ twine unit <yield -> m> = yield!; twine (m unit) unit
 twine unit unit = unit
 
 twine_cb : {<Yield> Callbacks [E|] -> <Yield> Callbacks [E|] -> [Yield] Callbacks [E|]}
-twine_cb <
+twine <yield -> m> <yield -> n> = yield!; twine (n unit) (m unit)
+twine <yield -> m> <n> = yield!; twine n! (m unit)
+twine cb <yield -> m> = yield!; twine (m unit) cb
+twine unit unit = unit

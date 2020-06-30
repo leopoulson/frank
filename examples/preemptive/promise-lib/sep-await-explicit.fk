@@ -112,17 +112,10 @@ controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
 -- Handler
 
 
--- twined : {{[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit}}
--- twined cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
-
 
 hdl : {Callbacks [Console, Promise, Await , RefState, Yield]
     -> <Promise> Unit -- thread
     -> [Yield, Console, RefState] Unit}
--- -- -- hdl : {Callbacks [K| Promise [K|], Await [K|], RefState]
--- -- --     -> <Promise[K|]> Unit -- thread
--- -- --     -> [K| RefState] Unit}
-
 
 ----- Installing Promises
 hdl cbs <promise (stopCb cb) -> thr>  =
@@ -145,32 +138,14 @@ hdl cbs <signal sig -> thr> =
     -- If there isn't, do nothing and carry on.
       { nothing -> hdl cbs (thr unit)
       | (just (pair id cb)) ->
-                               -- hdl (pop sig cbs)
-                               -- (hdlAwaitWithYield (cb sig); thr unit)}
                                hdl (pop sig cbs)
                                (twine (<Yield(s a a -> s a)>(hdlAwaitWithYield (cb sig)))
                                       (<Yield(s a a -> s a)>(thr unit))) }
-
+                               -- (<Yield(s a a -> s a)>(hdlAwaitWithYield (cb sig; <Await>(thr unit)))) }
 
                                    -- (thr unit)}
 
 hdl _ unit = unit
-
-
-
--- -- hdlAwait : {<Await[E|]> Unit -> [E | Promise[E|], RefState]Unit}
--- hdlAwait : {<Await[Console]> Unit -> [Console, Promise[Console], RefState]Unit}
--- hdlAwait : {<Await> Unit -> [Console, Promise, RefState]Unit}
-
--- hdlAwait <await cell -> thread> =
---     print "installing await\n";
---     case (readPid cell)
---       { (done x) -> hdlAwait (thread x)
---       | empty -> print "suspending\n";
---                  (writePid cell (addRes {x -> print "fulfilled"; (thread x)}));
---                  unit}
-
--- hdlAwait unit = unit
 
 
 
@@ -181,10 +156,10 @@ hdl _ unit = unit
 hdlAwaitWithYield : {<Await> Unit -> [Console, Yield, Promise, RefState]Unit}
 
 hdlAwaitWithYield <await cell -> thread> =
-    print "*- handling await\n";
+    -- print "*- handling await\n";
     case (readPid cell)
       { (done x) -> print "*- await done\n"; hdlAwaitWithYield ((thread x))
-      | empty -> print "*- blocking\n";
+      | empty -> --print "*- blocking\n";
                  (writePid cell (addRes {x -> (thread x)}));
                  unit}
 
@@ -215,7 +190,7 @@ seq unit unit = unit
 -- twine unit unit = print "\nT - 4\n"; unit
 
 twine : {<Yield> Unit -> <Yield> Unit -> [Console, Yield]Unit}
-twine <yield -> m> <yield -> n> = yield!; twine (n unit) (m unit)
+twine <yield -> m> <yield -> n> = yield!; twine (m unit) (n unit)
 twine <yield -> m> <n> = yield!; twine n! (m unit)
 twine unit <yield -> m> = yield!; twine (m unit) unit
 twine unit unit = unit

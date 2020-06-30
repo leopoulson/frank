@@ -1,0 +1,197 @@
+include std
+
+include map
+
+include helpers_cb
+
+-- Promise interface
+interface Promise =
+          promise R : Prom R [Promise, RefState] -> Pid R
+        | signal : Sig -> Unit
+        | await R : Pid R -> R
+
+interface Tick = tick : Unit
+
+data Prom R = opIntCb {Int -> R} | opStrCb {String -> R}
+
+data Sig = opIntSig Int | opStrSig String
+
+----------------
+-- Pid stuff
+
+data PromiseStatus X = empty | done X | addRes {X -> [Promise, RefState] Unit}
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+readPid2 : {Pid X [E|] -> [RefState] (Maybe X)}
+readPid2 (pid cell) = case (read cell)
+                        { (done x) -> just x
+                        | _ -> nothing }
+
+----------------
+-- Coroutines
+
+-- Just use fork to make a new thread.
+interface Co = fork : {[Co]Unit} -> Unit
+             -- | yield : Unit
+
+data Proc = proc {[Queue Proc]Unit}
+
+enqProc : {[Queue Proc]Unit} -> [Queue Proc]Unit
+enqProc p = enqueue (proc p)
+
+runNext : {[Queue Proc]Unit}
+runNext! = case dequeue! { (just (proc x)) -> x!
+                         | nothing         -> unit }
+
+-- defer forked processes
+scheduleBF : {<Co>Unit -> [Queue Proc]Unit}
+-- scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
+--                            runNext!
+scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
+                           scheduleBF (k unit)
+scheduleBF unit          = runNext!
+
+-- schedule by just immediately running forked thread
+scheduleNow : {<Co[E|]>Unit -> [E|]Unit}
+-- scheduleNow <yield -> k>  = scheduleNow (k unit)
+scheduleNow <fork p -> k> = scheduleNow (p!; k unit)
+scheduleNow unit          = unit
+
+--------------------------------------------------------------------------------
+-- Queue interface and implementation
+--------------------------------------------------------------------------------
+
+interface Queue S = enqueue : S -> Unit
+                  | dequeue : Maybe S
+
+-- FIFO queue implementation using a zipper
+fq : {List S -> List S -> <Queue S>X -> X}
+fq front        back <enqueue x -> k> = fq front (x :: back) (k unit)
+fq []           []   <dequeue -> k>   = fq [] [] (k nothing)
+fq []           back <dequeue -> k>   = fq (reverse back) [] (k dequeue!)
+fq (x :: front) back <dequeue -> k>   = fq front back (k (just x))
+fq front        back x                = x
+
+fifo : {<Queue S>X -> X}
+fifo <m> = fq [] [] m!
+
+
+------------
+-- Thread code
+
+client : {[Promise[Console], Console, RefState]Unit}
+client! = print "Starting!\n";
+          let res = promise (opIntCb
+              {x -> print "running "; ouint (x + 10); print " thanks!\n";
+                    let resA = promise (opIntCb {x -> print "running "; ouint (x + 15); print " thanks!\n"}) in
+                    await resA;
+                    print "resA done\n"} ) in
+          -- await res;
+          let res3 = promise (opIntCb {x -> print "running "; ouint (x + 20); print " thanks!\n"; unit} ) in
+          await res3;
+          print "Finished!\n";
+          unit
+
+server : {Int -> [Promise[Console], Console, RefState] Unit}
+server x = sleep 400000; signal (opIntSig x);
+           -- sleep 400000; signal (opIntSig x);
+           sleep 400000; signal (opIntSig x);
+           unit
+
+----------------
+-- Handler prep
+
+-- Given a pid and a callback, rewrites the callback such that it writes the
+-- result to the cell and returns unit, whilst still performing effects as before.
+-- Adds RefState to the ambient in the promise.
+
+to_write : {Pid R [E|]-> {S -> [E| Promise[E|], RefState]R} -> {S -> [E| Promise[E|], RefState] Unit}}
+to_write (pid cell) cb = {x -> case (read cell)
+                            { empty -> (write cell (done ((cb x))))
+                            | (addRes resumption) -> let res = (cb x) in
+                                                     let resump2 = {x -> (resumption x)} in
+                                                     resump2 res
+                                                        }}
+
+-- -- Converts a function of Int -> Unit to one of Sig -> unit.
+prep_int : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prep_int cb = {s -> case (s)
+                    { (opIntSig x) -> cb x
+                    | _ -> unit }}
+
+-- as above, for strings.
+prep_str : {{String -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prep_str cb = {st -> case (st)
+                     { (opStrSig st) -> cb st
+                     | _ -> unit}}
+
+----------------
+-- Handlers
+
+hdl : {Map Sig (List {Sig -> [Console, Promise[Console], RefState]Unit})  -- Promise storer
+    -> <Promise[Console] > Unit      -- client
+    -- -> [Co[Console, RefState], Console, RefState] Unit}
+    -> [Console, RefState] Unit}
+
+----- Installing promises
+----- cbMod is the original callback, modified to make its input and return types generic.
+-- hdl cbs <promise (opIntCb cb) -> client> =
+--     let cell = pid (new empty) in
+--     -- look at how they massacred my boy!
+--     let cbMod = prep_int ((to_write cell cb)) in
+--     hdl (snocOrInsert (opIntSig 0) cbMod cbs) (client cell)
+
+-- ----- Processing incoming signals without blocked computation.
+-- hdl cbs <signal sig -> client> =
+--     -- Look to see if there's any promises of this type waiting.
+--     case (peek sig cbs)
+--       -- if not, do nothing and return.
+--       { nothing -> hdl cbs (client unit)
+--       -- if there is, run it on the client's side and remove it.
+--       | (just cb) -> hdl (pop sig cbs) (cb sig; client unit)}
+
+-- hdl cbs <await cell -> thread> =
+--     case (<Console, Promise>(readPid cell))
+--       { (done x) -> hdl cbs (thread x)
+--       | empty -> (writePid cell (addRes {x -> (thread x)}));
+--                  unit}
+
+-- hdl _ unit = unit
+
+
+interface PrintBetween = printB : String -> Unit
+
+hdlPB : {<PrintBetween> Unit -> [Console]Unit}
+hdlPB <printB st -> k> = print st; hdlPB (k unit)
+hdlPB unit = unit
+
+----------------
+-- Running things
+
+-- comp : {[Promise[Console], Console, Co [Promise[Console], Console]] Unit}
+-- comp : {[Co[Promise [Console], Console, RefState], Promise[Console], Console, RefState] Unit}
+comp : {[Co[Console, RefState], Promise[Console], Console, RefState] Unit}
+-- comp : {[Promise[Console], Console, RefState] Unit}
+comp! =  <Co>(client!) ; fork { hdl mnil (server 10) }
+-- comp! = (client!)  ; fork {(server 10) }
+
+-- bfFifo : {<Co>Unit -> Unit}
+-- bfFifo <m> = fifo (scheduleBF (<Queue> m!))
+
+-- printer : {[Co[Console], PrintBetween] Unit}
+-- -- printer : {[PrintBetween] Unit}
+-- printer! = printB "normal " ; fork {hdlPB (printB "forked ")}; unit
+
+-- main : {[Console]Unit}
+-- main! = scheduleNow (hdlPB printer!)
+
+main2 : {[Console, RefState] Unit}
+-- -- -- main2! = bfFifo (hdl mnil (fork { <RefState>(client!) } ; fork { <RefState>(server 10) }; unit))
+main2! = unit -- scheduleNow (hdl mnil ((comp!)))

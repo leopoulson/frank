@@ -23,7 +23,7 @@ writePid (pid cell) x = write cell x
 interface Promise =
           promise R : Prom R [Promise, RefState] -> Pid R [Promise, RefState]
         | signal : Sig -> Unit
-        | await R : Pid R [Promise, RefState]-> R
+        | await R : Pid R [Promise, RefState] -> R
 
 data Op = call | result | cancel
 
@@ -55,10 +55,6 @@ printSig (pairSig op (pair st x)) = printOp op; print " "; print st; print " "; 
 ----------------------------
 -- Callback utilities
 
-to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
-to_write (pid cell) cb = {x -> case (read cell)
-                             { empty -> write cell (done (cb x))
-                             | (addRes resumption) -> resumption (cb x)}}
 
 prepInt : {Op -> {Int -> [E|]Unit} -> {Sig -> [E|] Unit}}
 prepInt op cb = {s -> case (s)
@@ -151,6 +147,10 @@ caller! = let counter = new 0 in
 
 ----------------------------
 -- Handler
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
 
 hdl : {Callbacks [K| Promise [K|], RefState]
     -> <Promise[K|]> Unit -- thread one
@@ -159,8 +159,8 @@ hdl : {Callbacks [K| Promise [K|], RefState]
 ----- Awaiting Promises
 hdl cbs <await cell -> th1> =
     case (readPid cell)
-         { (done x) -> hdl cbs ((th1 x))
-         | empty -> writePid cell (addRes ((th1)));
+         { (done x) -> hdl cbs (th1 x)
+         | empty -> writePid cell (addRes th1);
                     hdl cbs unit}
 
 ----- Installing Promises

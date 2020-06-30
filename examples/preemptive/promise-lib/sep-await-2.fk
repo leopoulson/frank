@@ -116,44 +116,44 @@ controller! = yield!; print "\n*- Stop\n"; signal (stopSig unit);
 -- twined cb client = {twine (<Yield>(cb!)) (<Yield>(client!))}
 
 
--- hdl : {Callbacks [Console, Promise [Console], Await [Console], RefState, Yield]
---     -> <Promise[Console]> Unit -- thread
---     -- -> [Yield, Console, RefState] Unit}
---     -> [Yield, Console, RefState] Unit}
--- -- -- hdl : {Callbacks [K| Promise [K|], Await [K|], RefState]
--- -- --     -> <Promise[K|]> Unit -- thread
--- -- --     -> [K| RefState] Unit}
+hdl : {Callbacks [Console, Promise [Console], Await [Console], RefState, Yield]
+    -> <Promise[Console]> Unit -- thread
+    -- -> [Yield, Console, RefState] Unit}
+    -> [Yield, Console, RefState] Unit}
+-- -- hdl : {Callbacks [K| Promise [K|], Await [K|], RefState]
+-- --     -> <Promise[K|]> Unit -- thread
+-- --     -> [K| RefState] Unit}
 
 
--- ----- Installing Promises
--- hdl cbs <promise (stopCb cb) -> thr>  =
---     -- Create new pid cell
---     let cell = pid (new empty) in
---     -- Process callback to convert to correct form
---     let cbMod = (prepStop ((to_write cell cb))) in
---     -- Add to list and resume.
---     hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
+----- Installing Promises
+hdl cbs <promise (stopCb cb) -> thr>  =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = (prepStop ((to_write cell cb))) in
+    -- Add to list and resume.
+    hdl (snocOrInsert (stopSig unit) (pair 0 cbMod) cbs) (thr cell)
 
--- hdl cbs <promise (goCb cb) -> thr> =
---     let cell = pid (new empty) in
---     let cbMod = prepGo (to_write cell cb) in
---     hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
+hdl cbs <promise (goCb cb) -> thr> =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    hdl (snocOrInsert (goSig unit) (pair 0 cbMod) cbs) (thr cell)
 
--- ----- Executing promises based on signals.
--- hdl cbs <signal sig -> thr> =
---     -- Look to see if there's any matching promises waiting.
---     print "msg in";
---     case (peek sig cbs)
---     -- If there isn't, do nothing and carry on.
---       { nothing -> hdl cbs (thr unit)
---       | (just (pair id cb)) -> hdl (pop sig cbs)
---                                    -- (hdlAwait (cb sig); thr unit)}
---                                    -- (hdlAwait (cb sig);
---                                    (thr unit)}
---                                    -- ((cb sig); thr unit)}
---                                    -- (thr unit)}
+----- Executing promises based on signals.
+hdl cbs <signal sig -> thr> =
+    -- Look to see if there's any matching promises waiting.
+    print "msg in";
+    case (peek sig cbs)
+    -- If there isn't, do nothing and carry on.
+      { nothing -> hdl cbs (thr unit)
+      | (just (pair id cb)) -> hdl (pop sig cbs)
+                                   -- (hdlAwait (cb sig); thr unit)}
+                                   -- (hdlAwait (cb sig);
+                                   (thr unit)}
+                                   -- ((cb sig); thr unit)}
+                                   -- (thr unit)}
 
--- hdl _ unit = unit
+hdl _ unit = unit
 
 
 
