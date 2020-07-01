@@ -7,7 +7,9 @@ include callbacks
 
 -- Just use fork to make a new thread.
 interface Fork = fork    : {[Fork, Yield]Unit} -> Unit
-
+               -- This essentially HAS to have this type.
+               | onOther  : {{[Queue Proc]Unit} -> [Fork, Yield, Queue Proc]Unit} -> Unit
+               | execOther : {[Fork, Yield, Queue Proc]Unit} -> Unit
 
 interface Yield = yield : Unit
 
@@ -21,12 +23,12 @@ runNext! = case dequeue! { (just (proc x)) -> x!
                          | nothing         -> unit }
 
 -- defer forked processes
-scheduleBF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
-scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
-                           runNext!
-scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
-                           scheduleBF (k unit)
-scheduleBF unit          = runNext!
+-- scheduleBF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
+-- scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
+--                            runNext!
+-- scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
+--                            scheduleBF (k unit)
+-- scheduleBF unit          = runNext!
 
 -- eagerly run forked processes
 scheduleDF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
@@ -34,6 +36,37 @@ scheduleDF <yield -> k>  = enqProc {scheduleDF (k unit)};
                            runNext!
 scheduleDF <fork p -> k> = enqProc {scheduleDF (k unit)};
                            scheduleDF (<Queue> p!)
+
+-- handling on-other
+scheduleDF <onOther f -> k> =
+    case dequeue!
+         { nothing -> unit
+         | (just (proc x)) ->
+         -- so the other thread is in x.
+         -- enqueue it back, w/ the function applied.
+                 -- let cont = {(f x)} in
+                 -- enqProc { (scheduleDF ((f x))) };
+                 enqProc { scheduleDF ((f x)) };
+                 unit
+                 };
+    -- defer that and lazily resume.
+    scheduleDF (k unit)
+
+
+-- scheduleDF <execOther t -> k> =
+--     case dequeue!
+--          { nothing -> unit
+--          | (just (proc x)) ->
+--          -- so the other thread is in x.
+--          -- enqueue it back, w/ the thunk t applied first.
+--                  -- let cont = {<Queue>(f x)} in
+--                  -- let cont = { ((t!) ; (x!)) } in
+--                  enqProc { scheduleDF (t!; <Yield, Fork>(x!)) };
+--                  unit
+--                  };
+--     -- defer that and lazily resume.
+--     scheduleDF (k unit)
+
 scheduleDF unit          = runNext!
 
 -- schedule by just immediately running forked thread
@@ -110,6 +143,7 @@ waitForStop! =
     promise (stopCb { _ ->
                        -- When we receive stop, we stop; so we install go and
                        -- block on it.
+                       print "Stop msg received\n";
                        let goPromise = promise (goCb {_ -> unit}) in
                        await goPromise;
                        -- Once go has been sent, we allow the thread to continue
@@ -133,7 +167,7 @@ controller! = print "\n*- Stop\n"; signal (stopSig unit);
               controller!
 
 ----------------------------
--- Callback utilities
+-- -- Callback utilities
 
 to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
 to_write (pid cell) cb = {x -> case (read cell)
@@ -161,7 +195,7 @@ apply cbId threadId callback thread =
 
 
 hdl : {Ref (Callbacks [Console, Promise [Console], RefState, Yield])
-    -> <Fork | Promise[Console]> Unit  -- thread, which can't Fork.
+    -> <Fork| Promise[Console]> Unit  -- thread, which can't Fork.
     -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
 
 -- Installing Promises
@@ -189,7 +223,16 @@ hdl cbs <signal sig -> thr> =
       -- If there is, pop them, then fork off the promise to be run.
       | (just (pair id cb)) ->
               write cbs (pop sig (read cbs));
+
+              -- fork { hdl cbs (cb sig) };
+              -- Here we need to say, run the callback on the other one.
+              -- onOther { x -> ((x!)) };
               fork { hdl cbs (cb sig) };
+              -- onOther { x -> <Queue>(hdl cbs (cb sig)); (x!) };
+              -- onOther { x ->  <Queue>(hdl cbs (print "yes"; (x!); unit))  };
+              -- execOther { <Queue>(hdl cbs (cb sig)) };
+              -- execOther { <Queue>(print "hey") };
+
               hdl cbs (thr unit)}
 
 hdl cbs <await cell -> thr> =
