@@ -38,8 +38,9 @@ readPid2 (pid cell) = case (read cell)
 -- Coroutines
 
 -- Just use fork to make a new thread.
-interface Co = fork : {[Co]Unit} -> Unit
-             -- | yield : Unit
+interface Co = fork : {[Co, Yield]Unit} -> Unit
+
+interface Yield = yield : Unit
 
 data Proc = proc {[Queue Proc]Unit}
 
@@ -51,26 +52,26 @@ runNext! = case dequeue! { (just (proc x)) -> x!
                          | nothing         -> unit }
 
 -- defer forked processes
-scheduleBF : {<Co>Unit -> [Queue Proc]Unit}
--- scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
---                            runNext!
+scheduleBF : {<Co, Yield>Unit -> [Queue Proc]Unit}
+scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
+                           runNext!
 scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
                            scheduleBF (k unit)
 scheduleBF unit          = runNext!
 
 -- eagerly run forked processes
-scheduleDF : {<Co>Unit -> [Queue Proc]Unit}
--- scheduleDF <yield -> k>  = enqProc {scheduleDF (k unit)};
---                            runNext!
+scheduleDF : {<Co, Yield>Unit -> [Queue Proc]Unit}
+scheduleDF <yield -> k>  = enqProc {scheduleDF (k unit)};
+                           runNext!
 scheduleDF <fork p -> k> = enqProc {scheduleDF (k unit)};
                            scheduleDF (<Queue> p!)
 scheduleDF unit          = runNext!
 
 -- schedule by just immediately running forked thread
-scheduleNow : {<Co[E|]>Unit -> [E|]Unit}
--- scheduleNow <yield -> k>  = scheduleNow (k unit)
-scheduleNow <fork p -> k> = scheduleNow (p!; k unit)
-scheduleNow unit          = unit
+-- scheduleNow : {<Co[E|]>Unit -> [E|]Unit}
+-- -- scheduleNow <yield -> k>  = scheduleNow (k unit)
+-- scheduleNow <fork p -> k> = scheduleNow (p!; k unit)
+-- scheduleNow unit          = unit
 
 --------------------------------------------------------------------------------
 -- Queue interface and implementation
@@ -90,7 +91,7 @@ fq front        back x                = x
 fifo : {<Queue S>X -> X}
 fifo <m> = fq [] [] m!
 
-runDF : {<Co> Unit -> Unit}
+runDF : {<Co, Yield> Unit -> Unit}
 runDF <m> = fifo (scheduleDF (<Queue> m!))
 
 ------------
@@ -151,8 +152,8 @@ modify f cell = write cell (f (read cell))
 -- Handlers
 
 hdl : {Ref (Map Sig (List {Sig -> [Console, Promise[Console], RefState]Unit}))  -- Promise storer
-    -> <Co | Promise[Console]> Unit      -- client, which can't make new Co effects
-    -> [Co[Console, RefState], Console, RefState] Unit}
+    -> <Co, Yield | Promise[Console]> Unit      -- client, which can't make new Co effects
+    -> [Co[Console, RefState], Yield, Console, RefState] Unit}
 
 ----- Installing promises
 ----- cbMod is the original callback, modified to make its input and return types generic.
@@ -172,7 +173,7 @@ hdl cbs <signal sig -> client> =
       { nothing -> hdl cbs (client unit)
       -- if there is, run it on the client's side and remove it.
       | (just cb) -> write cbs (pop sig (read cbs));
-                     fork { hdl cbs (cb sig) };
+                     fork { hdl cbs ((cb sig)) };
                      hdl (cbs) (client unit)}
 
 hdl cbs <await cell -> thread> =
@@ -183,16 +184,6 @@ hdl cbs <await cell -> thread> =
 
 hdl _ unit = unit
 
-
-interface PrintBetween = printB : String -> Unit
-
-hdlPB : {<PrintBetween> Unit -> [Console]Unit}
-hdlPB <printB st -> k> = print st; hdlPB (k unit)
-hdlPB unit = unit
-
-crop : {<Co> Unit -> Unit}
-crop <fork p -> k> = unit
-crop unit = unit
 
 ----------------
 -- Running things
@@ -205,4 +196,4 @@ hdled! = let cbs = new mnil in
          unit
 
 main : {[Console, RefState] Unit}
-main! = runDF hdled!
+main! = runDF (<Yield> hdled!)
