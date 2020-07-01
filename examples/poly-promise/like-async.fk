@@ -6,7 +6,7 @@ include helpers_cb
 
 -- Promise interface
 interface Promise =
-          promise R : Prom R [Promise, RefState] -> Pid R
+          promise R : Prom R [Promise, RefState, Yield] -> Pid R
         | signal : Sig -> Unit
         | await R : Pid R -> R
 
@@ -19,7 +19,7 @@ data Sig = opIntSig Int | opStrSig String
 ----------------
 -- Pid stuff
 
-data PromiseStatus X = empty | done X | addRes {X -> [Promise, RefState] Unit}
+data PromiseStatus X = empty | done X | addRes {X -> [Promise, RefState, Yield] Unit}
 
 data Pid X = pid (Ref (PromiseStatus X))
 
@@ -38,7 +38,7 @@ readPid2 (pid cell) = case (read cell)
 -- Coroutines
 
 -- Just use fork to make a new thread.
-interface Co = fork : {[Co, Yield]Unit} -> Unit
+interface Fork = fork : {[Fork, Yield]Unit} -> Unit
 
 interface Yield = yield : Unit
 
@@ -52,7 +52,7 @@ runNext! = case dequeue! { (just (proc x)) -> x!
                          | nothing         -> unit }
 
 -- defer forked processes
-scheduleBF : {<Co, Yield>Unit -> [Queue Proc]Unit}
+scheduleBF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
 scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
                            runNext!
 scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
@@ -60,7 +60,7 @@ scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
 scheduleBF unit          = runNext!
 
 -- eagerly run forked processes
-scheduleDF : {<Co, Yield>Unit -> [Queue Proc]Unit}
+scheduleDF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
 scheduleDF <yield -> k>  = enqProc {scheduleDF (k unit)};
                            runNext!
 scheduleDF <fork p -> k> = enqProc {scheduleDF (k unit)};
@@ -68,7 +68,7 @@ scheduleDF <fork p -> k> = enqProc {scheduleDF (k unit)};
 scheduleDF unit          = runNext!
 
 -- schedule by just immediately running forked thread
--- scheduleNow : {<Co[E|]>Unit -> [E|]Unit}
+-- scheduleNow : {<Fork[E|]>Unit -> [E|]Unit}
 -- -- scheduleNow <yield -> k>  = scheduleNow (k unit)
 -- scheduleNow <fork p -> k> = scheduleNow (p!; k unit)
 -- scheduleNow unit          = unit
@@ -91,30 +91,34 @@ fq front        back x                = x
 fifo : {<Queue S>X -> X}
 fifo <m> = fq [] [] m!
 
-runDF : {<Co, Yield> Unit -> Unit}
+runDF : {<Fork, Yield> Unit -> Unit}
 runDF <m> = fifo (scheduleDF (<Queue> m!))
 
 ------------
 -- Thread code
 
-client : {[Promise[Console], Console, RefState]Unit}
+client : {[Promise[Console], Console, RefState, Yield]Unit}
 client! = print "Client Starting!\n";
           let res = promise (opIntCb
               {x -> print "running "; ouint (x + 10); print " thanks!\n";
                     let resA = promise (opIntCb {x -> print "running "; ouint (x + 15); print " thanks!\n"}) in
                     await resA;
                     print "resA done\n"} ) in
+          yield!;
           await res;
           let res3 = promise (opIntCb {x -> print "running "; ouint (x + 20); print " thanks!\n"; unit} ) in
           await res3;
           print "Client Finished!\n";
           unit
 
-server : {Int -> [Promise[Console], Console, RefState] Unit}
+server : {Int -> [Promise[Console], Console, RefState, Yield] Unit}
 server x = print "Server starting!\n";
            sleep 400000; signal (opIntSig x);
+           yield!;
            sleep 400000; signal (opIntSig x);
+           yield!;
            sleep 400000; signal (opIntSig x);
+           yield!;
            print "Server finishing!\n";
            unit
 
@@ -125,7 +129,8 @@ server x = print "Server starting!\n";
 -- result to the cell and returns unit, whilst still performing effects as before.
 -- Adds RefState to the ambient in the promise.
 
-to_write : {Pid R [E|]-> {S -> [E| Promise[E|], RefState]R} -> {S -> [E| Promise[E|], RefState] Unit}}
+-- to_write : {Pid R [E|]-> {S -> [E| Promise[E|], RefState, Yield]R} -> {S -> [E| Promise[E|], RefState, Yield] Unit}}
+to_write : {Pid R [E|]-> {S -> [E| Promise[E|], RefState, Yield]R} -> {S -> [E| Promise[E|], RefState, Yield] Unit}}
 to_write (pid cell) cb = {x -> case (read cell)
                             { empty -> (write cell (done ((cb x))))
                             | (addRes resumption) -> let res = (cb x) in
@@ -151,9 +156,9 @@ modify f cell = write cell (f (read cell))
 ----------------
 -- Handlers
 
-hdl : {Ref (Map Sig (List {Sig -> [Console, Promise[Console], RefState]Unit}))  -- Promise storer
-    -> <Co, Yield | Promise[Console]> Unit      -- client, which can't make new Co effects
-    -> [Co[Console, RefState], Yield, Console, RefState] Unit}
+hdl : {Ref (Map Sig (List {Sig -> [Console, Promise[Console], RefState, Yield]Unit}))  -- Promise storer
+    -> <Fork | Promise[Console]> Unit      -- client, which can't make new Fork effects
+    -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
 
 ----- Installing promises
 ----- cbMod is the original callback, modified to make its input and return types generic.
@@ -188,12 +193,11 @@ hdl _ unit = unit
 ----------------
 -- Running things
 
-
-hdled : {[Console, RefState, Co[Console, RefState]] Unit}
+hdled : {[Console, RefState, Fork[Console, RefState], Yield] Unit}
 hdled! = let cbs = new mnil in
          fork { hdl cbs client! };
          fork { hdl cbs (server 10) };
          unit
 
 main : {[Console, RefState] Unit}
-main! = runDF (<Yield> hdled!)
+main! = runDF (hdled!)
