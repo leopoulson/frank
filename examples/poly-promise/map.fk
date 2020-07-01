@@ -18,15 +18,15 @@ insert key value m = mentry key value m
 
 
 
-modify : {K -> K -> Bool}    -- equality
-      -> {V -> V}            -- modifying function
-      -> K                   -- index
-      -> Map K V             -- init map
-      -> Map K V             -- resulting map
-modify _ _ _ mnil = mnil
-modify eq mdfy k (mentry k' v rest) = if (eq k k')
-       { mentry k' (mdfy v) (modify eq mdfy k rest) }
-       { mentry k' v        (modify eq mdfy k rest) }
+-- modify : {K -> K -> Bool}    -- equality
+--       -> {V -> V}            -- modifying function
+--       -> K                   -- index
+--       -> Map K V             -- init map
+--       -> Map K V             -- resulting map
+-- modify _ _ _ mnil = mnil
+-- modify eq mdfy k (mentry k' v rest) = if (eq k k')
+--        { mentry k' (mdfy v) (modify eq mdfy k rest) }
+--        { mentry k' v        (modify eq mdfy k rest) }
 ------ end map stuff
 
 eqn : {Int -> Int -> Bool}
