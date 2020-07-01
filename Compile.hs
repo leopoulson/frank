@@ -111,10 +111,25 @@ compileCtr (Ctr id ts _) =
 compileMHDef :: MHDef Desugared -> Compile (S.Def S.Exp)
 compileMHDef (Def id ty xs _) = do xs' <- mapM compileClause xs
                                    tyRep <- compileCType ty
-                                   return $ S.DF id tyRep xs'
+
+                                   trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
+                                     (return $ S.DF id tyRep xs')
 
 compileCType :: CType Desugared -> Compile [([S.Adap], [String])]
-compileCType (CType xs _ _) = mapM compilePort xs
+compileCType (CType xs peg _) =
+  do ab <- pegYields peg;
+     trace ("Contains yield? = " ++ show ab) $
+       mapM compilePort xs
+
+pegYields :: Peg Desugared -> Compile Bool
+pegYields (Peg ab ty _) = abYields ab
+
+abYields :: Ab Desugared -> Compile Bool
+abYields (Ab _ itfs _) = itfYields itfs
+
+-- So we can use this to find out if an interface contains yield.
+itfYields :: ItfMap Desugared -> Compile Bool
+itfYields (ItfMap m _) = return ("Yield" `elem` (M.keys m))
 
 compilePort :: Port Desugared -> Compile ([S.Adap], [String])
 compilePort p@(Port adjs _ _) =
