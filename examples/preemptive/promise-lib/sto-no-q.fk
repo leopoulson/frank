@@ -14,31 +14,21 @@ interface Fork = --fork    : {[Fork, Yield]Unit} -> Unit
 
 interface Yield = yield : Unit
 
-
--- defer forked processes
--- scheduleBF : {<Fork, Yield>Unit -> [Queue Proc]Unit}
--- scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
---                            runNext!
--- scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
---                            scheduleBF (k unit)
--- scheduleBF unit          = runNext!
-
--- Schedules two threads with each other.
-schedule2 : {<Fork, Yield>Unit -> {[Fork, Yield]Unit} -> Unit}
-schedule2 <yield -> k> susp = schedule2 susp! {k unit}
-schedule2 <onOther p -> k> susp = schedule2 (k unit) {p susp}
-schedule2 <execOther x -> k> susp = schedule2 (k unit) {x!; susp!}
-schedule2 unit susp = unit
-
-
+-- Schedule two concurrent threads.
+schedule2 : {<Fork, Yield>Unit -> <Fork, Yield>Unit -> Unit}
+schedule2 <yield -> k> <susp> = schedule2 susp! (k unit)
+schedule2 <onOther p -> k> <susp> = schedule2 (k unit) (p susp)
+schedule2 <execOther x -> k> <susp> = schedule2 (k unit) (x!; susp!)
+schedule2 unit <susp> = schedule2 susp! unit
+schedule2 unit unit = unit
 
 ----------------------------
 -- Promise structures.
 
 interface Promise [E] =
-          promise R : Prom R [E| Promise[E|], RefState, Yield] -> Pid R [E|Promise[E|], RefState, Yield]
+          promise R : Prom R [E| Promise[E|], RefState, Yield, Fork[E|RefState]] -> Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]
         | signal : Sig -> Unit
-        | await R : Pid R [E|Promise[E|], RefState, Yield]-> R
+        | await R : Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]-> R
 
 data Prom R [E] = goCb {Unit -> [E|] R}
                 | stopCb {Unit -> [E|] R}
@@ -54,9 +44,9 @@ eqSig _ _ = false
 ----------------------------
 -- Pids
 
-data Pid X = pid (Ref (PromiseStatus X))
+data Pid X  = pid (Ref (PromiseStatus X ))
 
-data PromiseStatus X = empty | done X | addRes {X -> Unit}
+data PromiseStatus X  = empty | done X | addRes {X ->  Unit}
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -74,15 +64,13 @@ counter x = ouint x; print " ";
             counter (x + 1)
 
 -- Install an interrupt handler for stopping.
-waitForStop : {[Console, Promise[Console], RefState, Yield] Pid Unit [Console, Promise[Console], RefState, Yield]}
+waitForStop : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]] Pid Unit [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]}
 waitForStop! =
     promise (stopCb { _ ->
                        -- When we receive stop, we stop; so we install go and
                        -- block on it.
-                       print "Stop msg received\n";
                        let goPromise = promise (goCb {_ -> unit}) in
-                       print "goin";
-                       -- await goPromise;
+                       await goPromise;
                        -- Once go has been sent, we allow the thread to continue
                        -- computing and reinstall the stop waiter.
                        waitForStop!;
@@ -93,7 +81,7 @@ sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
-thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
+thread1 : {[Promise[Console], Console, RefState, Yield, Fork[Console, RefState]] Unit}
 thread1! = print "starting"; (waitForStop!); counter 0
 
 controller : {[Promise [Console], Console, RefState, Yield] Unit}
@@ -103,8 +91,8 @@ controller! = print "\n*- Stop\n"; signal (stopSig unit);
               sleepAndYield 400000;
               controller!
 
--- ----------------------------
--- -- -- Callback utilities
+----------------------------
+-- Callback utilities
 
 to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
 to_write (pid cell) cb = {x -> case (read cell)
@@ -131,9 +119,8 @@ apply cbId threadId callback thread =
 -- Handler
 
 
-hdl : {Ref (Callbacks [Console, Promise [Console], RefState, Yield])
-    -> <Promise[Console]> Unit  -- thread, which can't Fork.
-    -- -> <Fork| Promise[Console]> Unit  -- thread, which can't Fork.
+hdl : {Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+    -> <Promise[Console]> Unit
     -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
 
 -- -- -- Installing Promises
@@ -141,7 +128,7 @@ hdl cbs <promise (stopCb cb) -> th1> =
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to correct form
-    let cbMod = prepStop (to_write cell cb) in
+    let cbMod = prepStop ((to_write cell cb)) in
     -- Add to list and resume.
     write cbs (snocOrInsert (stopSig unit) (pair 0 cbMod) (read cbs));
     hdl cbs (th1 cell)
@@ -154,55 +141,31 @@ hdl cbs <promise (goCb cb) -> th1>  =
 
 ------ Executing promises based on signals.
 hdl cbs <signal sig -> thr> =
-    -- print "signalling\n";
     -- Look to see if there's any matching promises waiting.
     case (peek sig (read cbs))
     -- If there isn't, do nothing and carry on.
-      { nothing -> -- print "nothing to do!\n";
-                   hdl cbs (thr unit)
+      { nothing -> hdl cbs (thr unit)
       -- If there is, pop them, then fork off the promise to be run.
       | (just (pair id cb)) ->
-              print "forking\n";
               write cbs (pop sig (read cbs));
-
-              -- onOther { x -> (<Fork, Yield>(x!)) }; -- this works!
-
               -- Take the callback & the other comp, join them then handle this.
-              onOther { x -> (hdl cbs (<Fork>(cb sig); <Promise>(x!))) };
-
-              -- execOther { hdl cbs (cb sig) };
-             
-              -- fork { hdl cbs (cb sig) };
-              -- Here we need to say, run the callback on the other one.
-              -- fork { hdl cbs (cb sig) };
-              -- onOther { x -> <Queue>(hdl cbs (cb sig)); (x!) };
-              -- onOther { x ->  <Queue>(hdl cbs (print "yes"; (x!); unit))  };
-              -- execOther { <Queue>(hdl cbs (cb sig)) };
-              -- execOther { <Queue>(print "hey") };
-
+              onOther { x -> (hdl cbs (cb sig; <Promise> x!)) };
               hdl cbs (thr unit)}
 
 hdl cbs <await cell -> thr> =
     case (readPid cell)
          { (done x) -> hdl cbs (thr x)
-         | empty -> let thr2 = {x -> <Promise> (thr x)} in
-                    -- writePid cell (addRes thr2);
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
                     hdl cbs unit}
                    
 hdl _ unit = unit
 
 
--- hdled : {[Console, RefState, Fork[Console, RefState], Yield] Unit}
 hdled : {[Console, RefState] Unit}
 hdled! = let cbs = new cbnil in
-         -- fork { hdl cbs thread1! };
-         -- fork { hdl cbs controller! };
-         -- schedule2 ( hdl cbs thread1! ) { hdl cbs controller! };
-         schedule2 ( hdl cbs (<Fork> thread1!) ) { hdl cbs (<Fork> controller!) };
+         schedule2 ( hdl cbs ( thread1!) ) ( hdl cbs (<Fork> controller!) );
          unit
-
--- -- -- main : {[Console, RefState]Unit}
--- -- -- main! = runDF hdled!
 
 main : {[Console, RefState] Unit}
 main! = hdled!
