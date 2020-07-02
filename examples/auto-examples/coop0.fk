@@ -28,11 +28,11 @@ print s = map ouch s; unit
 {--- Cooperative concurrency ---}
 -- interface Yield = yield : Unit
 
-add3 : {Int -> Int}
+add3 : {Int -> [Yield]Int}
 add3 x = x + 3
 
-idler : {Unit}
-idler! = map add3 (range 0 200); unit
+idler : {[Yield]Unit}
+idler! = map add3 (range 0 2100); unit
 
 -- example abstract concurrent computation
 testA : {[Yield, Console]Unit}
@@ -119,4 +119,4 @@ main_before! = print "FIFO EDR: "; fifo (runWith scheduleEDR [testA, testB, test
         print "\n"
 
 main : {[Console]Unit}
-main! = simpleYield main_before!
+main! = main_before!

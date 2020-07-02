@@ -120,12 +120,13 @@ compileCtr (Ctr id ts _) =
 compileMHDef :: MHDef Desugared -> Compile (S.Def S.Exp)
 compileMHDef (Def id ty xs _) =
                                 do
-                                 (yable, tyRep) <- trace ("Compiling " ++ id) $ compileCType ty
+                                 -- (yable, tyRep) <- trace ("Compiling " ++ id) $ compileCType ty
+                                 (yable, tyRep) <- compileCType ty
                                  writeYieldable yable
                                  xs' <- mapM compileClause xs
 
-                                 trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
-                                   (return $ S.DF id tyRep xs')
+                                 -- trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
+                                 (return $ S.DF id tyRep xs')
 
 compileCType :: CType Desugared -> Compile (Bool, [([S.Adap], [String])])
 compileCType (CType xs peg _) =
@@ -140,9 +141,10 @@ abYields (Ab _ itfs _) = itfYields itfs
 
 -- So we can use this to find out if an interface contains yield.
 itfYields :: ItfMap Desugared -> Compile Bool
-itfYields (ItfMap m _) = let res = "Yield" `elem` (M.keys m) in
-        if res then trace "Itf has Yield" $ return res
-               else return res
+-- itfYields (ItfMap m _) = let res = "Yield" `elem` (M.keys m) in
+--         if res then trace "Itf has Yield" $ return res
+--                else return res
+itfYields (ItfMap m _) = return ("Yield" `elem` (M.keys m))
 
 compilePort :: Port Desugared -> Compile ([S.Adap], [String])
 compilePort p@(Port adjs _ _) =
@@ -205,9 +207,9 @@ compileUse (Op op _) = compileOp op
 compileUse (App use xs _) = do yields <- canYield
                                u <- compileUse use
                                args <- mapM compileTm xs
-                               trace (if yields then "App can yield" else "") $
+                               -- trace (if yields then "App can yield" else "") $
                                  -- Need to pass in `yield` here.
-                                 return (S.SApp u args yields)
+                               return (S.SApp u args yields)
 compileUse (Adapted [] t _) = compileUse t
 compileUse (Adapted (r:rr) t a) =
   do (cs, r') <- compileAdaptor r
