@@ -123,30 +123,19 @@ compute g (EI n)       ls   = consume (VI n) ls                             -- 1
 compute g (ED f)       ls   = consume (VD f) ls                             -- 1) feed double
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
--- compute g ((EA "yield" :$ [])) ls = -- trace "found it!" $
---   compute g (EA "yield") (Fun g [] : ls)
-
--- compute g (f :$ as)    ls   =  -- 2) Application. Compute function. Save args for later.
-compute g (SApp f as _)    ls   =  -- 2) Application. Compute function. Save args for later.
+-- 2) Application. Compute function. Save args for later.
+compute g (SApp f as yields)    ls   =
   do now <- get;
-     if (now > 200)
-       then do put 0;
-               -- compute g ((EA "yield" :$ []) :! (f :$ as)) ls
-               compute g ((SApp (EA "yield") [] False) :! (SApp f as False)) ls
+     -- So now we only insert a yield if counter is over 200 and the term is
+     -- allowed to yield.
+     if (now > 200 && yields)
+       then do modify (\x -> x - 200)
+               compute g ((SApp (EA "yield") [] False) :! (SApp f as yields)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
 
 -- original
-compute g (e :! f)     ls   =
-  -- do modify (+1);
-  --    now <- get;
-  --    -- trace ("st is " ++ show now ++ "\n") $
-  --     (if (now > 200)
-  --      then do put 0;
-  --              -- trace "inserting" $
-  --                compute g ((EA "yield" :$ []) :! (e :! f)) ls
-       -- else compute g e (Seq g f : ls))
-       compute g e (Seq g f : ls)
+compute g (e :! f)     ls   = compute g e (Seq g f : ls)
 
 compute g (e :// f)    ls   = compute g e (Qes g f : ls)                    -- 2) Composition. Compute 1st exp.  save 2nd for later.
 compute g (EF hss pes) ls   = consume (VF g hss pes) ls                     -- 1) feed in function
