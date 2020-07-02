@@ -552,7 +552,7 @@ ppExp (EI n) = int n
 ppExp (EA x) = text $ "'" ++ x
 ppExp (e :& e') | isListExp e = text "[" <> ppListExp e'
 ppExp p@(_ :& _) = text "[" <> ppExp' p
-ppExp (f :$ xs) = let args = hcat $ punctuate comma (map ppExp xs) in
+ppExp (SApp f xs _) = let args = hcat $ punctuate comma (map ppExp xs) in
   ppExp f <> text "(" <> args <> text ")"
 ppExp (e :! e') = ppExp e <> semi <> ppExp e'
 ppExp (e :// e') = ppExp e <> text "/" <> ppExp e'

@@ -126,11 +126,13 @@ compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save
 -- compute g ((EA "yield" :$ [])) ls = -- trace "found it!" $
 --   compute g (EA "yield") (Fun g [] : ls)
 
-compute g (f :$ as)    ls   =  -- 2) Application. Compute function. Save args for later.
+-- compute g (f :$ as)    ls   =  -- 2) Application. Compute function. Save args for later.
+compute g (SApp f as _)    ls   =  -- 2) Application. Compute function. Save args for later.
   do now <- get;
      if (now > 200)
        then do put 0;
-               compute g ((EA "yield" :$ []) :! (f :$ as)) ls
+               -- compute g ((EA "yield" :$ []) :! (f :$ as)) ls
+               compute g ((SApp (EA "yield") [] False) :! (SApp f as False)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
 
@@ -289,7 +291,8 @@ tryRules f g [] cs ls = if (any isYield cs)
   -- Make arguments for the passed-in function, which is the one being
   -- performed, and reinvoke it
   then let (gUpdated, expargs) = makeArgs g cs in
-       compute gUpdated (f :$ expargs) ls
+       -- compute gUpdated (f :$ expargs) ls
+       compute gUpdated (SApp f expargs False) ls
   -- if not, abort as before.
   else command "abort" [] [] 0 ls
   where
@@ -322,12 +325,14 @@ makeExp n (Ret v) g = let name = freshName n in (g :/ [name := v], EV name)
 makeExp n (Call "yield" _ [] ks) g =
   let name = freshName n in
     -- apply `unit` to name.
-    (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
+    -- (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
+    (g :/ [name := VK ks], SApp (EV name) [SApp (EV "unit") [] False] False)
 -- If it's any other sort of call, bind the name to the call in the env, and
 -- invoke the cont. 0-arily.
 makeExp n call g =
   let name = freshName n in
-    (g :/ [name := VC call], EV name :$ [])
+    -- (g :/ [name := VC call], EV name :$ [])
+    (g :/ [name := VC call], SApp (EV name) [] False)
 
 
 -- given:   env `g`, list of patterns, list of comps

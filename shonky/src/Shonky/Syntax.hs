@@ -12,13 +12,16 @@ import Shonky.Renaming
 
 -- A program is of type [Def Exp]
 
+type CanYield = Bool
+
 data Exp
   = EV String                               -- variable
   | EI Int                                  -- int
   | ED Double                               -- float (double)
   | EA String                               -- atom
   | Exp :& Exp                              -- cons
-  | Exp :$ [Exp]                            -- n-ary application
+  -- | Exp :$ [Exp] -- n-ary application
+  | SApp Exp [Exp] CanYield
   | Exp :! Exp                              -- composition (;)
   | Exp :// Exp                             -- composition (o)
   | EF [([Adap], [String])] [([Pat], Exp)]  -- handler
@@ -33,7 +36,7 @@ data Exp
   | ER Adap Exp                             -- adapted exp
   deriving (Show, Eq)
 infixr 6 :&
-infixl 5 :$
+-- infixl 5 :$
 infixr 4 :!
 
 data Def v
@@ -133,7 +136,8 @@ pLisp p n c = pGap *> (n <$ pP "]" <|> c <$> p <*> pCdr) where
     <|> c <$ pP "," <* pGap <*> p <*> pCdr)
 
 pApp :: Exp -> P Exp
-pApp f = (((f :$) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
+-- pApp f = (((f :$) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
+pApp f = (((\x -> SApp f x False) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
        <|> (((f :!) <$ pP ";" <* pGap <*> pExp) >>= pApp)
        <|> (((f ://) <$ pP "/" <* pGap <*> pExp) >>= pApp)
        <|> pure f

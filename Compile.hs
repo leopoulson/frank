@@ -207,7 +207,8 @@ compileUse (App use xs _) = do yields <- canYield
                                u <- compileUse use
                                args <- mapM compileTm xs
                                trace (if yields then "App can yield" else "") $
-                                 return (u S.:$ args)
+                                 -- return (u S.:$ args)
+                                 return (S.SApp u args False)
 compileUse (Adapted [] t _) = compileUse t
 compileUse (Adapted (r:rr) t a) =
   do (cs, r') <- compileAdaptor r
@@ -222,7 +223,8 @@ compileAdaptor adp@(CompilableAdp x m ns _) = do
 
 compileDataCon :: DataCon Desugared -> Compile S.Exp
 compileDataCon (DataCon id xs _) = do xs' <- mapM compileTm xs
-                                      return $ (S.EV id) S.:$ xs'
+                                      -- return $ (S.EV id) S.:$ xs'
+                                      return $ (S.SApp (S.EV id) xs' False)
 
 compileSComp :: SComp Desugared -> Compile S.Exp
 compileSComp (SComp xs _) = S.EF <$> pure [([], [])] <*> mapM compileClause xs
