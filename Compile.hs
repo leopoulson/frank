@@ -35,16 +35,25 @@ type Compile = State CState
 type ItfCmdMap = M.Map Id [Id]
 
 data CState = MkCState { imap :: ItfCmdMap
-                       , atoms :: S.Set String}
+                       , atoms :: S.Set String
+                       , yieldable :: Bool}
 
 initCState :: CState
-initCState = MkCState M.empty S.empty
+initCState = MkCState M.empty S.empty False
 
 getCState :: Compile CState
 getCState = get
 
 putCState :: CState -> Compile ()
 putCState = put
+
+canYield :: Compile Bool
+canYield = do s <- getCState
+              return (yieldable s)
+
+writeYieldable :: Bool -> Compile ()
+writeYieldable x = do s <- getCState
+                      putCState $ s { yieldable = x }
 
 getCCmds :: Id -> Compile [Id]
 getCCmds itf = do s <- getCState
@@ -109,17 +118,19 @@ compileCtr (Ctr id ts _) =
 -- use the type to generate the signature of commands handled
 -- generate a clause 1-to-1 correspondence
 compileMHDef :: MHDef Desugared -> Compile (S.Def S.Exp)
-compileMHDef (Def id ty xs _) = do xs' <- mapM compileClause xs
-                                   tyRep <- compileCType ty
+compileMHDef (Def id ty xs _) =
+                                do
+                                 (yable, tyRep) <- trace ("Compiling " ++ id) $ compileCType ty
+                                 writeYieldable yable
+                                 xs' <- mapM compileClause xs
 
-                                   trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
-                                     (return $ S.DF id tyRep xs')
+                                 trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
+                                   (return $ S.DF id tyRep xs')
 
-compileCType :: CType Desugared -> Compile [([S.Adap], [String])]
+compileCType :: CType Desugared -> Compile (Bool, [([S.Adap], [String])])
 compileCType (CType xs peg _) =
   do ab <- pegYields peg;
-     trace ("Contains yield? = " ++ show ab) $
-       mapM compilePort xs
+     (\x -> (ab, x)) <$> mapM compilePort xs
 
 pegYields :: Peg Desugared -> Compile Bool
 pegYields (Peg ab ty _) = abYields ab
@@ -129,7 +140,9 @@ abYields (Ab _ itfs _) = itfYields itfs
 
 -- So we can use this to find out if an interface contains yield.
 itfYields :: ItfMap Desugared -> Compile Bool
-itfYields (ItfMap m _) = return ("Yield" `elem` (M.keys m))
+itfYields (ItfMap m _) = let res = "Yield" `elem` (M.keys m) in
+        if res then trace "Itf has Yield" $ return res
+               else return res
 
 compilePort :: Port Desugared -> Compile ([S.Adap], [String])
 compilePort p@(Port adjs _ _) =
@@ -189,7 +202,12 @@ compileTm (DCon d _) = compileDataCon d
 
 compileUse :: Use Desugared -> Compile S.Exp
 compileUse (Op op _) = compileOp op
-compileUse (App use xs _) = (S.:$) <$> compileUse use <*> mapM compileTm xs
+-- compileUse (App use xs _) = trace ("app") $ (S.:$) <$> compileUse use <*> mapM compileTm xs
+compileUse (App use xs _) = do yields <- canYield
+                               u <- compileUse use
+                               args <- mapM compileTm xs
+                               trace (if yields then "App can yield" else "") $
+                                 return (u S.:$ args)
 compileUse (Adapted [] t _) = compileUse t
 compileUse (Adapted (r:rr) t a) =
   do (cs, r') <- compileAdaptor r
