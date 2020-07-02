@@ -1,0 +1,228 @@
+include std
+
+include callbacks
+
+--------------------------------------------------------------------------------
+-- Queue implementation
+--------------------------------------------------------------------------------
+
+-- interface Queue S = enqueue : S -> Unit
+--                   | dequeue : Maybe S
+
+data Queue S = queue (List S) (List S)
+
+qnil : {Queue S}
+qnil! = queue [] []
+
+enqueue : {S -> Queue S -> Queue S}
+enqueue x (queue front back) = queue front (x :: back)
+
+dequeue : {Queue S -> Maybe (Pair S (Queue S))}
+dequeue (queue [] []) = nothing
+dequeue (queue [] back) = dequeue (queue (reverse back) [])
+dequeue (queue (x :: front) back) = just (pair x (queue front back))
+
+----------------
+-- Coroutines
+
+-- Just use fork to make a new thread.
+interface Fork = --fork    : {[Fork, Yield]Unit} -> Unit
+               -- This essentially HAS to have this type.
+               onOther : {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> Unit
+               -- onOther : {{[Yield]Unit} -> [Yield, Fork]Unit} -> Unit
+
+               | execOther : {[Fork, Yield]Unit} -> Unit
+
+interface Yield = yield : Unit
+
+-- Sometimes we might want to fail.
+interface Error = error : String -> Unit
+
+-- Schedule two concurrent threads.
+schedule2 : {<Fork, Yield>Unit -> <Fork, Yield>Unit -> Unit}
+schedule2 <yield -> k> <susp> = schedule2 susp! (k unit)
+schedule2 <onOther p -> k> <susp> = schedule2 (k unit) (p susp)
+schedule2 <execOther x -> k> <susp> = schedule2 (k unit) (x!; susp!)
+schedule2 unit <susp> = schedule2 susp! unit
+schedule2 unit unit = unit
+
+schedule3 : {<Fork, Yield>Unit -> {[Fork, Yield]Unit} -> Unit}
+schedule3 <yield -> k> susp = schedule3 susp! {k unit}
+schedule3 <onOther p -> k> susp = schedule3 (k unit) {p susp}
+schedule3 <execOther x -> k> susp = schedule3 (k unit) {x!; susp!}
+schedule3 unit susp = schedule3 susp! {unit}
+-- schedule3 unit unit = unit
+
+scheduleQ : {<Fork, Yield>Unit -> Queue {[Fork, Yield]Unit} -> Unit}
+scheduleQ <yield -> k> procs =
+    case (dequeue procs)
+      { nothing -> unit
+      | (just (pair proc procs)) -> scheduleQ proc! (enqueue {k unit} procs)}
+scheduleQ <onOther p -> k> procs =
+    case (dequeue procs)
+      { nothing -> unit
+      | (just (pair proc procs)) -> scheduleQ (k unit) (enqueue {p proc} procs)}
+-- If we have a unit here, just yield and start the next one.
+scheduleQ unit procs = scheduleQ (yield!) procs
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E| Promise[E|], RefState, Yield, Fork[E|RefState]] -> Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]
+        | signal : Sig -> Unit
+        | await R : Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]-> R
+
+data Prom R [E] = goCb {Unit -> [E|] R}
+                | stopCb {Unit -> [E|] R}
+
+data Sig = goSig Unit | stopSig Unit
+
+eqSig : {Sig -> Sig -> Bool}
+eqSig (goSig _) (goSig _) = true
+eqSig (stopSig _) (stopSig _) = true
+eqSig _ _ = false
+
+
+----------------------------
+-- Pids
+
+data Pid X  = pid (Ref (PromiseStatus X ))
+
+data PromiseStatus X  = empty | done X | addRes {X ->  Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+counter : {Int -> [Console, Yield]Unit}
+counter x = ouint x; print " ";
+            sleep 200000;
+            yield!;
+            counter (x + 1)
+
+-- Install an interrupt handler for stopping.
+waitForStop : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]] Pid Unit [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]}
+waitForStop! =
+    promise (stopCb { _ ->
+                       -- When we receive stop, we stop; so we install go and
+                       -- block on it.
+                       let goPromise = promise (goCb {_ -> unit}) in
+                       await goPromise;
+                       -- Once go has been sent, we allow the thread to continue
+                       -- computing and reinstall the stop waiter.
+                       waitForStop!;
+                       unit})
+
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+thread1 : {[Promise[Console], Console, RefState, Yield, Fork[Console, RefState]] Unit}
+thread1! = print "starting"; (waitForStop!); counter 0
+
+controller : {[Promise [Console], Console, RefState, Yield] Unit}
+controller! = print "\n*- Stop\n"; signal (stopSig unit);
+              sleepAndYield 400000;
+              print "\n*- Go\n"; signal (goSig unit);
+              sleepAndYield 400000;
+              controller!
+
+print_yield : {String -> [Console, Yield]Unit}
+print_yield st = print st; print "\n";
+                 sleep 250000;
+                 yield!;
+                 print_yield st
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepStop : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepStop cb = {s -> case (s)
+                   { (stopSig x) -> cb x
+                   | _ -> unit}}
+
+prepGo : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepGo cb = {s -> case (s)
+                   { (goSig x) -> cb x
+                   | _ -> unit}}
+
+apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
+apply cbId threadId callback thread =
+    if (cbId == threadId)
+     {{callback!; thread!}}
+     {thread}
+
+----------------------------
+-- Handler
+
+
+hdl : {Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+    -> <Promise[Console]> Unit
+    -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
+
+-- -- -- Installing Promises
+hdl cbs <promise (stopCb cb) -> th1> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = prepStop ((to_write cell cb)) in
+    -- Add to list and resume.
+    write cbs (snocOrInsert (stopSig unit) (pair 0 cbMod) (read cbs));
+    hdl cbs (th1 cell)
+
+hdl cbs <promise (goCb cb) -> th1>  =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    write cbs (snocOrInsert (goSig unit) (pair 0 cbMod) (read cbs));
+    hdl cbs (th1 cell)
+
+------ Executing promises based on signals.
+hdl cbs <signal sig -> thr> =
+    -- Look to see if there's any matching promises waiting.
+    case (peek sig (read cbs))
+    -- If there isn't, do nothing and carry on.
+      { nothing -> hdl cbs (thr unit)
+      -- If there is, pop them, then fork off the promise to be run.
+      | (just (pair id cb)) ->
+              write cbs (pop sig (read cbs));
+              -- Take the callback & the other comp, join them then handle this.
+              onOther { x -> (hdl cbs (cb sig; <Promise> x!)) };
+              hdl cbs (thr unit)}
+
+hdl cbs <await cell -> thr> =
+    case (readPid cell)
+         { (done x) -> hdl cbs (thr x)
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
+                    hdl cbs unit}
+
+hdl _ unit = unit
+
+
+-- hdled : {[Console, RefState] Unit}
+-- hdled! = let cbs = new cbnil in
+--          scheduleQ (hdl cbs thread1!) (enqueue { hdl cbs (<Fork> controller!) } qnil!);
+--          unit
+
+-- Three threads, printing out cat names.
+cats : {[Console]Unit}
+cats! = scheduleQ ( print_yield "Beppy" )
+                  ( enqueue { print_yield "Botsman" } (
+                           enqueue { print_yield "Timmy"} qnil!
+                                   ) )
+
+
+main : {[Console, RefState] Unit}
+main! = cats!
