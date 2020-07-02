@@ -202,13 +202,12 @@ compileTm (DCon d _) = compileDataCon d
 
 compileUse :: Use Desugared -> Compile S.Exp
 compileUse (Op op _) = compileOp op
--- compileUse (App use xs _) = trace ("app") $ (S.:$) <$> compileUse use <*> mapM compileTm xs
 compileUse (App use xs _) = do yields <- canYield
                                u <- compileUse use
                                args <- mapM compileTm xs
                                trace (if yields then "App can yield" else "") $
-                                 -- return (u S.:$ args)
-                                 return (S.SApp u args False)
+                                 -- Need to pass in `yield` here.
+                                 return (S.SApp u args yields)
 compileUse (Adapted [] t _) = compileUse t
 compileUse (Adapted (r:rr) t a) =
   do (cs, r') <- compileAdaptor r
@@ -220,11 +219,12 @@ compileAdaptor adp@(CompilableAdp x m ns _) = do
   cmds <- getCCmds x
   return (cmds, adpToRen adp)
 
-
+-- TODO: Is it right to let data constructions be interrupted?
 compileDataCon :: DataCon Desugared -> Compile S.Exp
 compileDataCon (DataCon id xs _) = do xs' <- mapM compileTm xs
+                                      yields <- canYield
                                       -- return $ (S.EV id) S.:$ xs'
-                                      return $ (S.SApp (S.EV id) xs' False)
+                                      return $ (S.SApp (S.EV id) xs' yields)
 
 compileSComp :: SComp Desugared -> Compile S.Exp
 compileSComp (SComp xs _) = S.EF <$> pure [([], [])] <*> mapM compileClause xs

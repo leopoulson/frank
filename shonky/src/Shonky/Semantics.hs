@@ -128,8 +128,8 @@ compute g (SApp f as yields)    ls   =
   do now <- get;
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield.
-     if (now > 200 && yields)
-       then do modify (\x -> x - 200)
+     if (now > 400 && yields)
+       then do modify (\x -> x - 400)
                compute g ((SApp (EA "yield") [] False) :! (SApp f as yields)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
@@ -278,9 +278,9 @@ tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
 -- If any of the comps are yields;
 tryRules f g [] cs ls = if (any isYield cs)
   -- Make arguments for the passed-in function, which is the one being
-  -- performed, and reinvoke it
+  -- performed, and reinvoke it. This expression doesn't need to be able to
+  -- yield, so can just explicitly pass in False.
   then let (gUpdated, expargs) = makeArgs g cs in
-       -- compute gUpdated (f :$ expargs) ls
        compute gUpdated (SApp f expargs False) ls
   -- if not, abort as before.
   else command "abort" [] [] 0 ls

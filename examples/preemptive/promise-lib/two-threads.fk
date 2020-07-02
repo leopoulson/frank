@@ -42,15 +42,15 @@ writePid (pid cell) x = write cell x
 
 counter1 : {Int -> [Console, Yield]Unit}
 counter1 x = ouint x; print " ";
-            sleep 200000;
-            yield!;
+            sleepMany 100000;
+            -- yield!;
             counter1 (x + 1)
 
 -- 'counts' through characters
 counter2 : {Int -> [Console, Yield]Unit}
 counter2 x = ouch (toc x); print " ";
-             sleep 200000;
-             yield!;
+             sleepMany 200000;
+             -- yield!;
              counter2 (x + 1)
 
 
@@ -86,10 +86,10 @@ thread2 : {[Promise[Console, Yield], Console, RefState, Yield] Unit}
 thread2! = waitForGoGuarded 1; counter2 0
 
 -- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
-sleepAndYield : Int -> [Console, Yield]Unit
-sleepAndYield x = if (x < 0)
+sleepMany : Int -> [Console, Yield]Unit
+sleepMany x = if (x < 0)
               { unit }
-              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+              { sleep 10000; yield!; sleepMany (x - 10000) }
 
 -- Controller just sends signals and breaks.
 controller : {Int -> [Promise [Console, Yield], Console, RefState, Yield] Unit}
@@ -97,7 +97,7 @@ controller k = print "\n*- Stop "; ouint k; print "\n";
                signal (stopSig k);
                print "*- Go "; ouint (k + 1); print "\n";
                signal (goSig (k + 1));
-               sleepAndYield 400000;
+               sleepMany 400000;
                controller (k + 1)
 
 ----------------------------
@@ -190,24 +190,6 @@ hdl cbs <th1> <th2> <signal sig -> control> =
         ((applyMany 1 sig th2 cbsHere)!)
         (control unit)
 
--- hdl cbs <yield -> th1> <yield -> th2> <yield -> control> =
---     hdl cbs (th1 unit) (th2 unit) (control unit)
-
--- hdl cbs <yield -> th1> <th2> <yield -> control> =
---     hdl cbs (th1 unit) th2! (control unit)
-
--- hdl cbs <th1> <yield -> th2> <yield -> control> =
---     hdl cbs th1! (th2 unit) (control unit)
-
--- hdl cbs <yield -> th1> <th2> <control> =
---     hdl cbs (th1 unit) th2! control!
-
--- hdl cbs <th1> <yield -> th2> <control> =
---     hdl cbs th1! (th2 unit) control!
-
--- hdl cbs <th1> <th2> <yield -> control> =
---     hdl cbs th1! th2! (control unit)
-
 hdl _ unit _ _ = print "thread1 exits"
 hdl _ _ unit _ = print "thread2 exits"
 hdl _ _ _ unit = print "controller exits"
@@ -218,4 +200,4 @@ hdlYield <yield -> k> = hdlYield (k unit)
 hdlYield unit = unit
 
 main : {[Console, RefState]Unit}
-main! = hdlYield (hdl cbnil thread1! thread2! (controller 0))
+main! = (hdl cbnil thread1! thread2! (controller 0))
