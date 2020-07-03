@@ -65,10 +65,10 @@ interface Promise [E] =
         | signal : Sig -> Unit
         | await R : Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]-> R
 
-data Prom R [E] = goCb {Unit -> [E|] R}
-                | stopCb {Unit -> [E|] R}
+data Prom R [E] = goCb {Int -> [E|] R}
+                | stopCb {Int -> [E|] R}
 
-data Sig = goSig Unit | stopSig Unit
+data Sig = goSig Int | stopSig Int
 
 eqSig : {Sig -> Sig -> Bool}
 eqSig (goSig _) (goSig _) = true
@@ -92,45 +92,67 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
-counter : {Int -> [Console, Yield]Unit}
-counter x = ouint x; print " ";
+counter1 : {Int -> [Console, Yield]Unit}
+counter1 x = ouint x; print " ";
             sleep 200000;
             yield!;
-            counter (x + 1)
+            counter1 (x + 1)
 
--- Install an interrupt handler for stopping.
-waitForStop : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]] Pid Unit [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]}
-waitForStop! =
-    promise (stopCb { _ ->
-                       -- When we receive stop, we stop; so we install go and
-                       -- block on it.
-                       let goPromise = promise (goCb {_ -> unit}) in
-                       await goPromise;
-                       -- Once go has been sent, we allow the thread to continue
-                       -- computing and reinstall the stop waiter.
-                       waitForStop!;
-                       unit})
+-- 'counts' through characters
+counter2 : {Int -> [Console, Yield]Unit}
+counter2 x = ouch (toc x); print " ";
+             sleep 200000;
+             yield!;
+             counter2 (x + 1)
 
+goGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]] Pid Unit [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]}
+goGuarded arity =
+    promise (goCb { x -> if ((mod x 2) == arity)
+                       { unit }
+                       -- Slightly hacky; if we need to reinstall a
+                       -- blocked promise we have to await it when we
+                       -- call it again.
+                       -- This could lead to a very large buildup of awaited thunks?
+                       { let goPromise = (goGuarded arity) in await (goPromise)}})
+
+waitForStopGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+waitForStopGuarded arity =
+    promise (stopCb { x ->  print "Stop started for "; ouint arity; print "\n";
+                            if ((mod x 2) == arity)
+                          { let goPromise = (goGuarded arity) in
+                            await goPromise;
+                            waitForStopGuarded arity }
+                          { waitForStopGuarded arity }})
+    ; unit
+
+waitForGoGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+waitForGoGuarded arity =
+    goGuarded arity;
+    waitForStopGuarded arity
+
+-- -- Install an interrupt handler for stopping.
+thread1 : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+thread1! = waitForStopGuarded 0; counter1 0
+-- thread1! = counter1 0
+
+thread2 : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+thread2! = waitForGoGuarded 1; counter2 0
+-- thread2! = counter2 0
+
+-- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
 sleepAndYield : Int -> [Console, Yield]Unit
 sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
-thread1 : {[Promise[Console], Console, RefState, Yield, Fork[Console, RefState]] Unit}
-thread1! = print "starting"; (waitForStop!); counter 0
-
-controller : {[Promise [Console], Console, RefState, Yield] Unit}
-controller! = print "\n*- Stop\n"; signal (stopSig unit);
-              sleepAndYield 400000;
-              print "\n*- Go\n"; signal (goSig unit);
-              sleepAndYield 400000;
-              controller!
-
-print_yield : {String -> [Console, Yield]Unit}
-print_yield st = print st; print "\n";
-                 sleep 250000;
-                 yield!;
-                 print_yield st
+-- Controller just sends signals and breaks.
+controller : {Int -> [Promise [Console], Console, RefState, Yield] Unit}
+controller k = print "\n*- Stop "; ouint k; print "\n";
+               signal (stopSig k);
+               print "*- Go "; ouint (k + 1); print "\n";
+               signal (goSig (k + 1));
+               sleepAndYield 400000;
+               controller (k + 1)
 
 ----------------------------
 -- Callback utilities
@@ -140,12 +162,12 @@ to_write (pid cell) cb = {x -> case (read cell)
                              { empty -> write cell (done (cb x))
                              | (addRes resumption) -> resumption (cb x)}}
 
-prepStop : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepStop : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
 prepStop cb = {s -> case (s)
                    { (stopSig x) -> cb x
                    | _ -> unit}}
 
-prepGo : {{Unit -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepGo : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
 prepGo cb = {s -> case (s)
                    { (goSig x) -> cb x
                    | _ -> unit}}
@@ -172,13 +194,13 @@ hdl thId cbs <promise (stopCb cb) -> th1> =
     -- Process callback to convert to correct form
     let cbMod = prepStop ((to_write cell cb)) in
     -- Add to list and resume.
-    write cbs (snocOrInsert (stopSig unit) (pair thId cbMod) (read cbs));
+    write cbs (snocOrInsert (stopSig 0) (pair thId cbMod) (read cbs));
     hdl thId cbs (th1 cell)
 
 hdl thId cbs <promise (goCb cb) -> th1>  =
     let cell = pid (new empty) in
     let cbMod = prepGo (to_write cell cb) in
-    write cbs (snocOrInsert (goSig unit) (pair thId cbMod) (read cbs));
+    write cbs (snocOrInsert (goSig 0) (pair thId cbMod) (read cbs));
     hdl thId cbs (th1 cell)
 
 ------ Executing promises based on signals.
@@ -192,6 +214,7 @@ hdl thId cbs <signal sig -> thr> =
               write cbs (pop sig (read cbs));
               -- Take the callback & the other comp, join them then handle this.
               onK id { x -> (hdl id cbs (cb sig; <Promise> x!)) };
+              -- onK id { x -> (hdl id cbs ((cb sig);  x!)) };
               hdl thId cbs (thr unit)}
 
 hdl thId cbs <await cell -> thr> =
@@ -206,15 +229,11 @@ hdl _ _ unit = unit
 
 hdled : {[Console, RefState] Unit}
 hdled! = let cbs = new cbnil in
-         scheduleQ (hdl 0 cbs thread1!) (enqueue 1 { hdl 1 cbs (<Fork> controller!) } qnil!);
+         scheduleQ (hdl 0 cbs thread1!) (enqueue 1 {hdl 1 cbs (thread2!)}
+                                        (enqueue 2 {hdl 2 cbs (<Fork> (controller 0))} qnil!));
+         -- scheduleQ (hdl 0 cbs (<Fork> (controller 0))) (enqueue 1 {hdl 1 cbs (thread2!)}
+         --                                               (enqueue 2 {hdl 2 cbs (thread1!)} qnil!));
          unit
-
--- -- Three threads, printing out cat names.
--- cats : {[Console]Unit}
--- cats! = scheduleQ ( print_yield "Beppy" )
---                   ( enqueue { print_yield "Botsman" } (
---                            enqueue { print_yield "Timmy"} qnil!
---                                    ) )
 
 
 main : {[Console, RefState] Unit}
