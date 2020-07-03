@@ -64,6 +64,14 @@ concat (cons x xs) ys = cons x (concat xs ys)
 snoc : {List X -> X -> List X}
 snoc nil x = [x]
 snoc (y :: ys) x = y :: (snoc ys x)
+
+
+reverse' : {List X -> List X -> List X}
+reverse' []        ys = ys
+reverse' (x :: xs) ys = reverse' xs (x :: ys)
+
+reverse : {List X -> List X}
+reverse xs = reverse' xs []
 --- end of standard stuff ---
 
 fold : {X -> Y -> Y} -> Y -> List X -> Y

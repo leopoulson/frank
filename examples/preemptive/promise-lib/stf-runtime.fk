@@ -1,0 +1,250 @@
+include std
+
+include callbacks
+
+--------------------------------------------------------------------------------
+-- Queue implementation
+--------------------------------------------------------------------------------
+
+data PQueue S = pqueue Int (List (Pair Int S)) (List (Pair Int S))
+
+qnil : {PQueue S}
+qnil! = pqueue 0 [] []
+
+enqueue : {Int -> S -> PQueue S -> PQueue S}
+enqueue id proc (pqueue rng front back) = pqueue rng front ((pair id proc) :: back)
+
+dequeue : {PQueue S -> Maybe (Pair (Pair Int S) (PQueue S))}
+dequeue (pqueue _ [] []) = nothing
+dequeue (pqueue rng [] back) = dequeue (pqueue rng (reverse back) [])
+dequeue (pqueue rng (x :: front) back) = just (pair x (pqueue rng front back))
+
+running : {PQueue S -> Int}
+running (pqueue n _ _) = n
+
+setRunning : {Int -> PQueue S -> PQueue S}
+setRunning n (pqueue _ f b) = pqueue n f b
+
+applyIdList : {Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> List (Pair Int {[Fork, Yield]Unit}) -> List (Pair Int {[Fork, Yield]Unit})}
+applyIdList id f [] = []
+applyIdList id f ((pair id' x) :: rest) =
+    if (id == id')
+        { pair id' {(f x)} :: (<Fork, Yield>(applyIdList id f rest)) }
+        { pair id' x :: (applyIdList id f rest) }
+
+applyId : {Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> PQueue {[Fork, Yield]Unit} -> PQueue {[Fork, Yield]Unit}}
+applyId id f (pqueue k front back) = pqueue k (applyIdList id f front) (applyIdList id f back)
+
+----------------
+-- Coroutines
+
+-- Just use fork to make a new thread.
+interface Fork = -- Takes an id, being the id of the thread to install on.
+                 onK : Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> Unit
+
+-- interface Yield = yield : Unit
+
+
+-- Schedule two concurrent threads.
+scheduleQ : {<Fork, Yield>Unit -> PQueue {[Fork, Yield]Unit} -> Unit}
+scheduleQ <yield -> k> procs = let currentlyRunning = running procs in
+    case (dequeue procs)
+      { nothing -> unit
+      -- Complicated; we pop the next process and start executing that. This
+      -- means we have to update the 'currently running' information, and push
+      -- the suspended comp of the current one into the queue.
+      | (just (pair (pair id proc) newprocs)) ->
+          scheduleQ (proc!) (enqueue (currentlyRunning) {k unit} (setRunning id newprocs)) }
+
+scheduleQ <onK id p -> k> procs =
+    let newprocs = applyId id p procs in
+    scheduleQ (k unit) newprocs
+
+scheduleQ unit procs = scheduleQ (yield!) procs
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E| Promise[E|], RefState, Yield, Fork[E|RefState]] -> Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]
+        | signal : Sig -> Unit
+        | await R : Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]-> R
+
+data Prom R [E] = goCb {Int -> [E|] R}
+                | stopCb {Int -> [E|] R}
+
+data Sig = goSig Int | stopSig Int
+
+eqSig : {Sig -> Sig -> Bool}
+eqSig (goSig _) (goSig _) = true
+eqSig (stopSig _) (stopSig _) = true
+eqSig _ _ = false
+
+
+----------------------------
+-- Pids
+
+data Pid X  = pid (Ref (PromiseStatus X ))
+
+data PromiseStatus X  = empty | done X | addRes {X ->  Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+counter1 : {Int -> [Console, Yield]Unit}
+counter1 x = ouint x; print " ";
+            sleepMany 200000;
+            -- yield!;
+            counter1 (x + 1)
+
+-- 'counts' through characters
+counter2 : {Int -> [Console, Yield]Unit}
+counter2 x = ouch (toc x); print " ";
+             sleepMany 200000;
+             -- yield!;
+             counter2 (x + 1)
+
+goGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]] Pid Unit [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]}
+goGuarded arity =
+    promise (goCb { x -> if ((mod x 2) == arity)
+                       { unit }
+                       -- Slightly hacky; if we need to reinstall a
+                       -- blocked promise we have to await it when we
+                       -- call it again.
+                       -- This could lead to a very large buildup of awaited thunks?
+                       { let goPromise = (goGuarded arity) in await (goPromise)}})
+
+waitForStopGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+waitForStopGuarded arity =
+    promise (stopCb { x ->  if ((mod x 2) == arity)
+                          { let goPromise = (goGuarded arity) in
+                            await goPromise;
+                            waitForStopGuarded arity }
+                          { waitForStopGuarded arity }})
+    ; unit
+
+waitForGoGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+waitForGoGuarded arity =
+    goGuarded arity;
+    waitForStopGuarded arity
+
+-- -- Install an interrupt handler for stopping.
+thread1 : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+thread1! = waitForStopGuarded 0; counter1 0
+
+thread2 : {[Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
+thread2! = waitForGoGuarded 1; counter2 0
+
+-- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
+sleepMany : Int -> [Console, Yield]Unit
+sleepMany x = if (x < 0)
+              { unit }
+              { sleep 2000; sleepMany (x - 2000) }
+
+-- Controller just sends signals and breaks.
+controller : {Int -> [Promise [Console], Console, RefState, Yield] Unit}
+controller k = print "\n*- Stop "; ouint k; print "\n";
+               signal (stopSig k);
+               print "*- Go "; ouint (k + 1); print "\n";
+               signal (goSig (k + 1));
+               sleepMany 400000;
+               controller (k + 1)
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepStop : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepStop cb = {s -> case (s)
+                   { (stopSig x) -> cb x
+                   | _ -> unit}}
+
+prepGo : {{Int -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepGo cb = {s -> case (s)
+                   { (goSig x) -> cb x
+                   | _ -> unit}}
+
+apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
+apply cbId threadId callback thread =
+    if (cbId == threadId)
+     {{callback!; thread!}}
+     {thread}
+
+----------------------------
+-- Handler
+
+-- MAKE SURE TO DELETE THE CORRECT CALLBACKS BEFORE RUNNING THIS
+runMany : {Sig -> Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+       -> List (Pair Int {Sig -> [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]]Unit}) -> [Console, Fork [Console, RefState]]Unit}
+runMany sig cbs [] = unit
+runMany sig cbs ((pair id cb) :: rest) = -- print "Running on "; ouint id; print "\n";
+                                         onK id { x -> hdl id cbs (cb sig; <Promise> x!)}; runMany sig cbs rest
+
+hdl : {Int
+    -> Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+    -> <Promise[Console]> Unit
+    -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
+
+-- -- -- Installing Promises
+hdl thId cbs <promise (stopCb cb) -> th1> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = prepStop ((to_write cell cb)) in
+    -- Add to list and resume.
+    write cbs (snocOrInsert (stopSig 0) (pair thId cbMod) (read cbs));
+    hdl thId cbs (th1 cell)
+
+hdl thId cbs <promise (goCb cb) -> th1>  =
+    let cell = pid (new empty) in
+    let cbMod = prepGo (to_write cell cb) in
+    write cbs (snocOrInsert (goSig 0) (pair thId cbMod) (read cbs));
+    hdl thId cbs (th1 cell)
+
+hdl thId cbs <signal sig -> thr> =
+    case (lookup sig (read cbs))
+    -- if nothing is present, do nothing and carry on.
+    { nothing -> hdl thId cbs (thr unit)
+    -- if there is, run them all on their respective threads and clear them.
+    | (just cbsHere) ->
+            write cbs (clear sig (read cbs));
+            <RefState, Yield>(runMany sig cbs cbsHere);
+            hdl thId cbs (thr unit)}
+
+hdl thId cbs <await cell -> thr> =
+    case (readPid cell)
+         { (done x) -> hdl thId cbs (thr x)
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
+                    hdl thId cbs unit}
+
+hdl _ _ unit = unit
+
+---------------------------------
+------- Executing
+
+hdled : {[Console, RefState] Unit}
+hdled! = let cbs = new cbnil in
+         let others = enqueue 2 {hdl 2 cbs (<Fork> (controller 0))}
+                      (enqueue 1 {hdl 1 cbs thread2!} qnil!) in
+         let runner = {hdl 0 cbs thread1!} in
+
+         scheduleQ (runner!) others;
+         unit
+
+topYield : {<Yield> Unit -> Unit}
+topYield <yield -> k> = topYield (k unit)
+topYield unit = unit
+
+main : {[Console, RefState] Unit}
+main! = topYield hdled!
