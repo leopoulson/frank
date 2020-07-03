@@ -230,16 +230,16 @@ hdl thId cbs <await cell -> thr> =
 
 hdl _ _ unit = unit
 
+---------------------------------
+------- Executing
 
 hdled : {[Console, RefState] Unit}
 hdled! = let cbs = new cbnil in
-         -- let others = enqueue 2 {hdl 2 cbs (<Fork> (controller 0))}
-         --              (enqueue 1 {hdl 1 cbs thread2!} qnil!) in
-         let running = hdl 0 cbs thread1! in
+         let others = enqueue 2 {hdl 2 cbs (<Fork> (controller 0))}
+                      (enqueue 1 {hdl 1 cbs thread2!} qnil!) in
+         let runner = {hdl 0 cbs thread1!} in
 
-         -- scheduleQ running others;
-         scheduleQ (running) (enqueue 2 {hdl 2 cbs (<Fork> (controller 0))}
-                                        (enqueue 1 {hdl 1 cbs (thread2!)} qnil!));
+         scheduleQ (runner!) others;
          unit
 
 main : {[Console, RefState] Unit}
