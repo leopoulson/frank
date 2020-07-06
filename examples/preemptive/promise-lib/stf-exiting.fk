@@ -1,0 +1,237 @@
+include std
+
+include callbacks
+
+--------------------------------------------------------------------------------
+-- Queue implementation
+--------------------------------------------------------------------------------
+
+data PQueue S = pqueue Int (List (Pair Int (Maybe S))) (List (Pair Int (Maybe S)))
+
+qnil : {PQueue S}
+qnil! = pqueue 0 [] []
+
+enqueue : {Int -> S -> PQueue S -> PQueue S}
+enqueue id proc (pqueue rng front back) = pqueue rng front ((pair id (just proc)) :: back)
+
+enqueueNothing : {Int -> PQueue S -> PQueue S}
+enqueueNothing id (pqueue rng front back) = pqueue rng front ((pair id nothing) :: back)
+
+dequeue : {PQueue S -> Maybe (Pair (Pair Int (Maybe S)) (PQueue S))}
+dequeue (pqueue _ [] []) = nothing
+dequeue (pqueue rng [] back) = dequeue (pqueue rng (reverse back) [])
+dequeue (pqueue rng (x :: front) back) = just (pair x (pqueue rng front back))
+
+running : {PQueue S -> Int}
+running (pqueue n _ _) = n
+
+setRunning : {Int -> PQueue S -> PQueue S}
+setRunning n (pqueue _ f b) = pqueue n f b
+
+applyIdList : {Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> List (Pair Int (Maybe {[Fork, Yield]Unit})) -> List (Pair Int (Maybe {[Fork, Yield]Unit}))}
+applyIdList id f [] = []
+applyIdList id f ((pair id' x) :: rest) =
+    if (id == id')
+        { pair id' (just {f (fromNothing x)}) :: (<Fork, Yield>(applyIdList id f rest)) }
+        { pair id' x :: (applyIdList id f rest) }
+
+applyId : {Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> PQueue {[Fork, Yield]Unit} -> PQueue {[Fork, Yield]Unit}}
+applyId id f (pqueue k front back) = pqueue k (applyIdList id f front) (applyIdList id f back)
+
+----------------
+-- Scheduling utils
+
+fromNothing : {Maybe {[E|]Unit} -> {[E|]Unit}}
+fromNothing nothing = {unit}
+fromNothing (just c) = c
+
+-- isUnit : {<Fork, Yield> Unit -> Bool}
+-- isUnit unit = true
+-- isUnit <_> = false
+
+allDoneList : {List (Maybe {[Fork, Yield] Unit}) -> Bool}
+allDoneList [] = true
+allDoneList (nothing :: xs) = allDoneList xs
+allDoneList ((just _) :: _) = false
+
+allDone : {PQueue {[Fork, Yield] Unit} -> Bool}
+allDone (pqueue _ front back) = allDoneList (concat (map snd front) (map snd back))
+
+----------------
+-- Coroutines
+
+-- Just use fork to make a new thread.
+interface Fork = -- Takes an id, being the id of the thread to install on.
+                 onK : Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> Unit
+
+-- Yielding
+interface Yield = yield : Unit
+                | exit : Unit
+
+
+-- Schedule two concurrent threads.
+-- TODO: Update to use fromNothing so we don't repeat ourselves.
+scheduleQ : {<Fork, Yield>Unit -> PQueue {[Fork, Yield]Unit} -> Unit}
+scheduleQ <yield -> k> procs = let currentlyRunning = running procs in
+    case (dequeue procs)
+      { nothing -> unit
+      -- Complicated; we pop the next process and start executing that. This
+      -- means we have to update the 'currently running' information, and push
+      -- the suspended comp of the current one into the queue.
+      | (just (pair (pair id proc) newprocs)) ->
+          scheduleQ ((fromNothing proc)!) (enqueue (currentlyRunning) {k unit} (setRunning id newprocs)) }
+
+scheduleQ <onK id p -> k> procs =
+    let newprocs = applyId id p procs in
+    scheduleQ (k unit) newprocs
+
+-- If a thread exits, we store it as nothing in the queue and return.
+scheduleQ <exit -> k> procs = let currentlyRunning = running procs in
+    case (dequeue procs)
+      { nothing -> unit
+      -- Complicated; we pop the next process and start executing that. This
+      -- means we have to update the 'currently running' information, and push
+      -- the suspended comp of the current one into the queue.
+      | (just (pair (pair id proc) newprocs)) ->
+          scheduleQ ((fromNothing proc)!) (enqueueNothing (currentlyRunning) (setRunning id newprocs)) }
+
+-- So if this thread ends, and all the other threads are also finished, we just
+-- exit, as no more computation can happen.
+scheduleQ unit procs = --scheduleQ (yield!) procs
+    if (not (allDone procs))
+       { scheduleQ yield! procs }
+       { unit }
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E| Promise[E|], RefState, Yield, Fork[E|RefState]] -> Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]
+        | signal : Sig -> Unit
+        | await R : Pid R [E|Promise[E|], RefState, Yield, Fork[E|RefState]]-> R
+
+data Prom R [E] = printCb {String -> [E|] R}
+
+data Sig = printSig String
+
+eqSig : {Sig -> Sig -> Bool}
+eqSig (printSig _) (printSig _) = true
+eqSig _ _ = false
+
+
+----------------------------
+-- Pids
+
+data Pid X  = pid (Ref (PromiseStatus X ))
+
+data PromiseStatus X  = empty | done X | addRes {X ->  Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+
+printer : {[Promise[Console], Yield, Console] Unit}
+printer! = print "Printer starting\n";
+           promise (printCb { x -> print "*- "; print x ; print "\n"});
+           exit!
+
+
+printer2: {[Promise[Console], Yield, Console] Unit}
+printer2! = print "Printer2 starting\n";
+           promise (printCb { x -> print "*-"; print " Two! "; print x ; print "\n"});
+           unit
+
+sender : {[Promise[Console], Yield, Console]Unit}
+sender! = print "Sender starting\n";
+          signal (printSig "One");
+          exit!
+
+catter : {[Console, Yield] Unit}
+catter! = print "Beppy\n";
+          sleep 200000;
+          yield!;
+          catter!
+
+
+-- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+----------------------------
+-- Callback utilities
+
+to_write : Pid R [E| RefState]-> {S -> [E| RefState]R} -> {S -> [E| RefState] Unit}
+to_write (pid cell) cb = {x -> case (read cell)
+                             { empty -> write cell (done (cb x))
+                             | (addRes resumption) -> resumption (cb x)}}
+
+prepPrint : {{String -> [E|] Unit} -> {Sig -> [E|] Unit}}
+prepPrint cb = {s -> case (s)
+                   { (printSig x) -> cb x
+                   | _ -> unit}}
+
+----------------------------
+-- Handler
+
+-- MAKE SURE TO DELETE THE CORRECT CALLBACKS BEFORE RUNNING THIS
+runMany : {Sig -> Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+       -> List (Pair Int {Sig -> [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]]Unit}) -> [Console, Fork [Console, RefState]]Unit}
+runMany sig cbs [] = unit
+runMany sig cbs ((pair id cb) :: rest) = -- print "Running on "; ouint id; print "\n";
+                                         onK id { x -> hdl id cbs (cb sig; <Promise> x!)}; runMany sig cbs rest
+
+hdl : {Int
+    -> Ref (Callbacks [Console, Promise [Console], RefState, Yield, Fork[Console, RefState]])
+    -> <Promise[Console]> Unit
+    -> [Fork[Console, RefState], Yield, Console, RefState] Unit}
+
+-- -- -- Installing Promises
+hdl thId cbs <promise (printCb cb) -> th1> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to correct form
+    let cbMod = prepPrint (to_write cell cb) in
+    -- Add to list and resume.
+    write cbs (snocOrInsert (printSig "") (pair thId cbMod) (read cbs));
+    hdl thId cbs (th1 cell)
+
+hdl thId cbs <signal sig -> thr> =
+    case (lookup sig (read cbs))
+    -- if nothing is present, do nothing and carry on.
+    { nothing -> hdl thId cbs (thr unit)
+    -- if there is, run them all on their respective threads and clear them.
+    | (just cbsHere) ->
+            write cbs (clear sig (read cbs));
+            <RefState, Yield>(runMany sig cbs cbsHere);
+            hdl thId cbs (thr unit)}
+
+hdl thId cbs <await cell -> thr> =
+    case (readPid cell)
+         { (done x) -> hdl thId cbs (thr x)
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
+                    hdl thId cbs unit}
+
+hdl _ _ unit = unit
+
+---------------------------------
+------- Executing
+
+hdled : {[Console, RefState] Unit}
+hdled! = let cbs = new cbnil in
+         let runner = {hdl 0 cbs (<Fork, RefState> printer!)} in
+         let others = (enqueue 2 {catter!}
+                      (enqueue 1 {hdl 1 cbs (<Fork, RefState> sender!)} qnil!)) in
+
+         scheduleQ runner! others
+
+main : {[Console, RefState] Unit}
+main! = hdled!
