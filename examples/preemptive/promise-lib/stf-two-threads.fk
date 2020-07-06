@@ -42,6 +42,7 @@ applyId id f (pqueue k front back) = pqueue k (applyIdList id f front) (applyIdL
 interface Fork = -- Takes an id, being the id of the thread to install on.
                  onK : Int -> {{[Fork, Yield]Unit} -> [Fork, Yield]Unit} -> Unit
 
+-- Yielding
 interface Yield = yield : Unit
 
 
@@ -122,7 +123,7 @@ goGuarded arity =
 
 waitForStopGuarded : {Int -> [Console, Promise[Console], RefState, Yield, Fork[Console, RefState]]Unit}
 waitForStopGuarded arity =
-    promise (stopCb { x ->  if ((mod x 2) == arity)
+    promise (stopCb { x -> if ((mod x 2) == arity)
                           { let goPromise = (goGuarded arity) in
                             await goPromise;
                             waitForStopGuarded arity }
@@ -174,12 +175,6 @@ prepGo cb = {s -> case (s)
                    { (goSig x) -> cb x
                    | _ -> unit}}
 
-apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
-apply cbId threadId callback thread =
-    if (cbId == threadId)
-     {{callback!; thread!}}
-     {thread}
-
 ----------------------------
 -- Handler
 
@@ -200,7 +195,7 @@ hdl thId cbs <promise (stopCb cb) -> th1> =
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to correct form
-    let cbMod = prepStop ((to_write cell cb)) in
+    let cbMod = prepStop (to_write cell cb) in
     -- Add to list and resume.
     write cbs (snocOrInsert (stopSig 0) (pair thId cbMod) (read cbs));
     hdl thId cbs (th1 cell)
