@@ -30,6 +30,7 @@ running (pqueue n _ _) = n
 setRunning : {Int -> PQueue S -> PQueue S}
 setRunning n (pqueue _ f b) = pqueue n f b
 
+
 ----------------
 -- Coroutines
 
@@ -96,7 +97,7 @@ printer2! = print "Printer2 starting\n";
 
 sender : {[Promise[Console], Yield, Console]Unit}
 sender! = print "Sender starting\n";
-          signal (printSig "One");
+          -- signal (printSig "One");
           unit
 
 catter : {[Console, Yield] Unit}
@@ -160,21 +161,21 @@ dequeueT (tq []) = nothing
 dequeueT (tq (x :: _)) = just x
 
 -- data Threads [E] = threads (Map (Pair {[E|]Unit} (TQueue {Sig -> {[E|] Unit} -> {[E|] Unit}})))
-data Threads = threads (Map (Pair {[Console, RefState, Yield]Unit}
+data Threads = threads (Map (Pair {{[Console, RefState, Yield]Unit}}
                             (TQueue {Sig -> {[Console, RefState, Yield] Unit} -> {[Console, RefState, Yield] Unit}})))
 
-unthreads : {Threads -> [Console, RefState, Yield](Map (Pair {[Console, RefState, Yield]Unit}
+unthreads : {Threads -> (Map (Pair {{[Console, RefState, Yield]Unit}}
                             (TQueue {Sig -> {[Console, RefState, Yield] Unit} -> {[Console, RefState, Yield] Unit}})))}
 unthreads (threads k) = k
 
 mapAppend : {Int -> {Sig -> {[E|]Unit} -> {[E|]Unit}}
-          -> Map (Pair {[E|]Unit} (TQueue {Sig -> {[E|] Unit} -> {[E|] Unit}}))
-          -> Map (Pair {[E|]Unit} (TQueue {Sig -> {[E|] Unit} -> {[E|] Unit}}))}
+          -> Map (Pair {{[E|]Unit}} (TQueue {Sig -> {[E|] Unit} -> {[E|] Unit}}))
+          -> Map (Pair {{[E|]Unit}} (TQueue {Sig -> {[E|] Unit} -> {[E|] Unit}}))}
 mapAppend k f map = modifyMap k {p -> onSnd {q -> enqueueT f q} p} map
 
 -- The callback can produce promise commands, but the 'rest' can't!
 to_3 : {Int -> {Sig -> [Console, Promise[Console], RefState, Yield] Unit}
-     -> Ref (Threads)
+     -> Ref Threads
      -> {Sig -> {[Console, RefState, Yield] Unit} -> {[Console, RefState, Yield] Unit}}}
 to_3 id cb thrs = {sig rest -> {(hdl id thrs ((cb sig); <Promise> rest!))}}
 
@@ -186,7 +187,8 @@ enqueueMap k f (mentry k' (pair susp q) rest) =
         { mentry k' (pair susp (enqueueT f q)) rest }
         { mentry k' (pair susp q) (enqueueMap k f rest) }
 
-runThreads : {Sig -> Threads -> [Console, RefState, Yield]Threads}
+-- On each pair of thread and callback queue, execute the threads.
+runThreads : {Sig -> Threads -> Threads}
 runThreads _ (threads mnil) = threads mnil
 runThreads sig (threads (mentry k p rest)) =
     let pUp = <Console, RefState, Yield>(runThread sig p) in
@@ -195,24 +197,49 @@ runThreads sig (threads (mentry k p rest)) =
     -- threads (mentry k pUp mnil)
 
 -- TODO rewrite to use dequeue.
-runThread : {Sig -> Pair {[Console, RefState, Yield] Unit}
+runThread : {Sig -> Pair {{[Console, RefState, Yield] Unit}}
                          (TQueue {Sig -> {[Console, RefState, Yield]Unit} -> {[Console, RefState, Yield]Unit}})
-          -> (Pair {[Console, RefState, Yield] Unit}
+          -> (Pair {{[Console, RefState, Yield] Unit}}
                   (TQueue {Sig -> {[Console, RefState, Yield]Unit} -> {[Console, RefState, Yield]Unit}}))}
 
 -- No more left to run.
 runThread sig (pair susp (tq [])) = pair susp (tq [])
 -- Give cb the signal and the suspended comp.
 runThread sig (pair susp (tq (cb :: cbs))) =
-    let susp2 = cb sig susp in
+    let susp2 = cb sig susp! in
+    runThread sig (pair {susp2} (tq cbs))
 
-    runThread sig (pair ( susp2) (tq cbs))
+writeThk : {{{[Console, RefState, Yield]Unit}} -> Int -> Ref Threads -> [RefState]Unit}
+writeThk thk thId thrs =
+    let readthrs = read thrs in
+    let umap = <RefState>(unthreads readthrs) in
+    -- let umap = (unthreads ((read thrs))) in
+    -- let thk2 = {x -> <RefState> (thk x)} in
+    let modMap = modifyMap thId {p -> pair thk (snd p)} umap in
+    write thrs (threads modMap)
+
+lookupThk : {Int -> Ref Threads -> [RefState, Console] Maybe {{[Console, RefState, Yield] Unit}}}
+lookupThk thId thrs =
+    let readthrs = read thrs in
+    let umap = <RefState, Console> (unthreads readthrs) in
+    let p = lookup thId umap in
+    case p
+         { nothing -> print "Can't find thunk "; ouint thId; nothing
+         | (just (pair th _)) -> just th}
+
+    -- fst p
+    -- {unit}
+
+
+-- ----------------------------
+-- ----- Handling Promises
+-- ----------------------------
 
 hdl : {Int -> Ref Threads
--- hdl : {Int -> Ref (Pair {[Console, Promise[Console], RefState, Yield]Unit} (TQueue {Sig -> {[Console, Promise[Console], RefState, Yield] Unit} -> {[Console, Promise[Console], RefState, Yield] Unit}}))
     -> <Promise[Console]> Unit
     -> [Yield, Console, RefState] Unit}
 
+-- WTF
 hdl thId thrs <promise (printCb cb) -> k> =
     -- Create new pid cell
     let cell = pid (new empty) in
@@ -220,89 +247,66 @@ hdl thId thrs <promise (printCb cb) -> k> =
     let cbMod = prepPrint (to_write cell cb) in
 
     let cb3 = {sig rest -> { hdl thId thrs (cbMod sig; <Promise> rest!)}} in
-    let umap = (unthreads (read (thrs))) in
+    let readthrs = read thrs in
+    let umap = <Console, RefState, Yield>(unthreads readthrs) in
     let queued = enqueueMap thId cb3 umap in
 
     write thrs (threads queued);
-
-    unit
+    let res = {{(hdl thId thrs (k cell))}} in
+    <Console, Yield>(writeThk res thId thrs);
+    (<Console, RefState, Yield> res!)!
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
     -- update the threads w/ new signal
-    let newThrs = runThreads sig (read thrs) in
+    let readthrs = read thrs in
+    let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
     write thrs newThrs;
-    hdl thId thrs (thr unit)
-    -- unit
 
-
--- -- hdl thId cbs <signal sig -> thr> =
--- --     case (lookup sig (read cbs))
--- --     -- if nothing is present, do nothing and carry on.
--- --     { nothing -> hdl thId cbs (thr unit)
--- --     -- if there is, run them all on their respective threads and clear them.
--- --     | (just cbsHere) ->
--- --             write cbs (clear sig (read cbs));
--- --             -- <RefState, Yield>(runMany sig cbs cbsHere);
--- --             hdl thId cbs (thr unit)}
+    let res = {{hdl thId thrs (thr unit)}} in
+    <Console, Yield>(writeThk res thId thrs);
+    (<Console, RefState, Yield> res!)!
 
 hdl thId thrs <await cell -> thr> =
     case (readPid cell)
-         { (done x) -> hdl thId thrs (thr x)
-         -- thr2 has Fork in ambient, but addRes won't allow that.
-         | empty -> writePid cell (addRes thr);
-                    hdl thId thrs unit}
-
---     let umap = unthreads (read (thrs)) in
---     write thrs (mapAppend thId cbMod )
-    -- write thrs (threads (modifyMap thId {p -> onSnd {q -> enqueueT cbMod q} p} umap))
-    -- modifyCell thrs {x -> modifyThrs thId {p -> onSnd {q -> enqueueT cbMod q} p} thrs};
-    -- unit
-
--- hdl : {Int
---     -> Ref (Callbacks [Console, Promise [Console], RefState, Yield])
---     -> <Promise[Console]> Unit
---     -> [Yield, Console, RefState] Unit}
-
--- -- -- Installing Promises
--- hdl thId cbs <promise (printCb cb) -> th1> =
---     -- Create new pid cell
---     let cell = pid (new empty) in
---     -- Process callback to convert to correct form
---     let cbMod = prepPrint ((to_write cell cb)) in
---     -- Add to list and resume.
---     write cbs (snocOrInsert (printSig "") (pair thId cbMod) (read cbs));
---     hdl thId cbs (th1 cell)
-
-
--- hdl thId cbs <signal sig -> thr> =
---     case (lookup sig (read cbs))
---     -- if nothing is present, do nothing and carry on.
---     { nothing -> hdl thId cbs (thr unit)
---     -- if there is, run them all on their respective threads and clear them.
---     | (just cbsHere) ->
---             write cbs (clear sig (read cbs));
---             -- <RefState, Yield>(runMany sig cbs cbsHere);
---             hdl thId cbs (thr unit)}
-
--- hdl thId cbs <await cell -> thr> =
---     case (readPid cell)
---          { (done x) -> hdl thId cbs (thr x)
+         { (done x) ->
+                 let res = {{hdl thId thrs (thr x)}} in
+                 <Console, Yield>(writeThk res thId thrs);
+                 (<Console, RefState, Yield> res!)!
 --          -- thr2 has Fork in ambient, but addRes won't allow that.
---          | empty -> writePid cell (addRes thr);
---                     hdl thId cbs unit}
-
--- hdl thId _ unit = unit -- print "Thread "; ouint thId; print " done\n"; unit
+         | empty -> writePid cell (addRes thr);
+                    let res = {{hdl thId thrs unit}} in
+                    <Console, Yield>(writeThk res thId thrs);
+                    (<Console, RefState, Yield> res!)!}
 
 -------------------------------------
 -- Running
 
-hdled : {[Console, RefState] Unit}
-hdled! = let cbs = new cbnil in
-         let otherThrs = enqueue 1 { hdl 1 cbs (<RefState> sender!) }
-                          (enqueue 2 { hdl 2 cbs (<RefState> printer2!) } qnil!) in
+hdled : {[Console, RefState]Unit}
+hdled! =
+    let thrs = new (threads mnil) in
+    -- write thrs (threads (mentry 0 (pair { hdl 0 thrs (<RefState> sender!) } (tq []))
+    --                     (mentry 1 (pair { hdl 1 thrs (<RefState> printer!) } (tq [])) mnil)));
+    -- write thrs (threads (mentry 0 (pair {{ hdl 0 thrs (<RefState> sender!) }} (tq []))
+    --                     (mentry 1 (pair {{ hdl 1 thrs (<RefState> printer!) }} (tq [])) mnil)));
+    write thrs (threads (mentry 0 (pair {{ hdl 0 thrs (<RefState> sender!) }} (tq []))
+                        (mentry 1 (pair {{ hdl 1 thrs (<RefState> printer!) }} (tq [])) mnil)));
 
-         scheduleQ ( (hdl 0 cbs (<RefState>printer!))) otherThrs
+    let runner =  (lookupThk 0 thrs) in
+    case runner
+        { nothing -> unit
+        | (just runner) -> scheduleQ ( ( <Console, RefState, Yield>runner!)! ) qnil!}
+
+     --( enqueue 1 (lookupThk 1 thrs) qnil!)
+    -- scheduleQ ( hdl 0 thrs (<RefState> sender!)) qnil! --( enqueue 1 (lookupThk 1 thrs) qnil!)
+    -- unit
+
+-- hdled : {[Console, RefState] Unit}
+-- hdled! = let cbs = new cbnil in
+--          let otherThrs = enqueue 1 { hdl 1 cbs (<RefState> sender!) }
+--                           (enqueue 2 { hdl 2 cbs (<RefState> printer2!) } qnil!) in
+
+--          scheduleQ ( (hdl 0 cbs (<RefState>printer!))) otherThrs
 
 -- -- Three threads, printing out cat names.
 -- cats : {[Console]Unit}
@@ -311,5 +315,5 @@ hdled! = let cbs = new cbnil in
 --                            enqueue 2 { print_yield "Timmy"} qnil!
 --                                    ) )
 
--- main : {[Console, RefState] Unit}
--- main! = cats!
+main : {[Console, RefState] Unit}
+main! = hdled!
