@@ -78,6 +78,19 @@ fold : {X -> Y -> Y} -> Y -> List X -> Y
 fold f e nil = e
 fold f e (x :: xs) = f x (fold f e xs)
 
+lowest : {Int -> List Int -> Int}
+lowest x [] = x
+lowest x (y :: ys) =
+    if ( y < x )
+        { lowest y ys }
+        { lowest x ys }
+
+leastGT : {Int -> Int -> List Int -> Int}
+leastGT orig best [] = best
+leastGT orig best (x :: xs) =
+    if (and (orig < x) (x < best))
+        { leastGT orig x xs }
+        { leastGT orig best xs }
 
 
 
