@@ -52,19 +52,43 @@ scheduleQ <yield -> k> procs = let currentlyRunning = running procs in
 
 scheduleQ unit procs = scheduleQ (yield!) procs
 
-scheduleQEBar : {<Yield>Unit -> PQueue {[E| Yield]Unit} -> [E|] Unit}
-scheduleQEBar <yield -> k> procs = let currentlyRunning = running procs in
-    case (dequeue procs)
-      { nothing -> unit
-      -- Complicated; we pop the next process and start executing that. This
-      -- means we have to update the 'currently running' information, and push
-      -- the suspended comp of the current one into the queue.
-      | (just (pair (pair id proc) newprocs)) ->
-        -- scheduleQEBar unit (enqueue (currentlyRunning) {<Console> (k unit)} (setRunning id newprocs)) }
-          scheduleQEBar (proc!) (enqueue (currentlyRunning) {k unit} (setRunning id newprocs)) }
-      -- unit
+-- ScheduleT schedules threads, but uses the threads structure for this.
+scheduleT : {<Yield> Unit -> Int -> Ref Threads -> [Console, RefState]Unit}
+scheduleT <yield -> k> cur thrs =
+    let readthrs = read thrs in
+    let next = <Console, RefState> (nextId cur (keys (unthreads (readthrs)))) in
+    let newThk = fromMaybe (lookupThk cur thrs) in
+    let nowThkd = {{k unit}} in
+    <Console>(writeThk nowThkd cur thrs);
+    let newMod = <Console, RefState> newThk! in
 
-scheduleQEBar unit procs = scheduleQEBar (yield!) procs
+    scheduleT (newMod)! next thrs
+
+-- If the thread ends, just force a yield.
+scheduleT unit cur thrs = scheduleT yield! cur thrs
+
+-- Finds the next highest ID in threads.
+-- If there isn't one higher, i.e. the current is the max, finds the lowest.
+nextId : {Int -> List Int -> Int}
+nextId cur xs =
+   let lgt = leastGT cur 100 xs in
+   if (lgt == 100) -- i.e. cur is max
+       { lowest 100 xs }
+       { lgt }
+
+lowest : {Int -> List Int -> Int}
+lowest x [] = x
+lowest x (y :: ys) =
+    if ( y < x )
+        { lowest y ys }
+        { lowest x ys }
+
+leastGT : {Int -> Int -> List Int -> Int}
+leastGT orig best [] = best
+leastGT orig best (x :: xs) =
+    if (and (orig < x) (x < best))
+        { leastGT orig x xs }
+        { leastGT orig best xs }
 
 ----------------------------
 -- Promise structures.
@@ -102,7 +126,7 @@ writePid (pid cell) x = write cell x
 
 printer : {[Promise[Console], Yield, Console] Unit}
 printer! = print "Printer starting\n";
-           promise (printCb { x -> print "*- "; print x ; print "\n"});
+           promise (printCb { x -> print "\n*- "; print x ; print "\n"});
            unit
 
 
@@ -143,12 +167,6 @@ prepPrint : {{String -> [E|]Unit} -> {Sig -> [E|] Unit}}
 prepPrint cb = {s -> case (s)
                    { (printSig x) -> cb x
                    | _ -> unit}}
-
-apply : {Int -> Int -> {[E|]Unit} -> {[E|]R} -> {[E|]R}}
-apply cbId threadId callback thread =
-    if (cbId == threadId)
-     {{callback!; thread!}}
-     {thread}
 
 print_yield : {String -> [Console, Yield]Unit}
 print_yield st = print st; print "\n";
@@ -238,7 +256,7 @@ lookupThk thId thrs =
     let p = lookup thId umap in
     case p
          { nothing -> print "Can't find thunk "; ouint thId; nothing
-         | (just (pair th _)) -> print "got one\n"; just th}
+         | (just (pair th _)) -> just th}
 
     -- fst p
     -- {unit}
@@ -309,12 +327,21 @@ hdled! =
                         (mentry 1 (pair {{ hdl 1 thrs (<RefState> sender!) }} (tq [])) mnil)));
 
     let runner = (lookupThk 0 thrs) in
-    let oner = fromMaybe (lookupThk 1 thrs) in
-    let onerMod = (<Console, RefState> oner!) in
-    let others = enqueue 1 ( onerMod ) qnil! in
+    -- let oner = fromMaybe (lookupThk 1 thrs) in
+    -- let onerMod = (<Console, RefState> oner!) in
+    -- let others = enqueue 1 ( onerMod ) qnil! in
     case runner
         { nothing -> unit
-        | (just runner) -> scheduleQ ( ( <Console, RefState, Yield>runner!)! ) ( others)}
+        | (just runner) -> scheduleT ((<Console, RefState, Yield> runner!)!) 0 (thrs)}
+
+    -- old
+    -- let runner = (lookupThk 0 thrs) in
+    -- let oner = fromMaybe (lookupThk 1 thrs) in
+    -- let onerMod = (<Console, RefState> oner!) in
+    -- let others = enqueue 1 ( onerMod ) qnil! in
+    -- case runner
+    --     { nothing -> unit
+    --     | (just runner) -> scheduleQ ( ( <Console, RefState, Yield>runner!)! ) ( others)}
 
      --( enqueue 1 (lookupThk 1 thrs) qnil!)
     -- scheduleQ ( hdl 0 thrs (<RefState> sender!)) qnil! --( enqueue 1 (lookupThk 1 thrs) qnil!)
