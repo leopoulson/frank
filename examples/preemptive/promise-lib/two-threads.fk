@@ -64,16 +64,16 @@ goGuarded arity =
                        -- This could lead to a very large buildup of awaited thunks?
                        { let goPromise = (goGuarded arity) in await (goPromise)}})
 
-waitForStopGuarded : {Int -> [Console, Promise[Console, Yield], RefState, Yield]Unit}
+waitForStopGuarded : {Int -> [Promise[Console, Yield], Console, RefState, Yield] Pid Unit [Console, Yield, Promise[Console, Yield], RefState]}
 waitForStopGuarded arity =
     promise (stopCb { x -> if ((mod x 2) == arity)
                           { let goPromise = (goGuarded arity) in
                             await goPromise;
-                            waitForStopGuarded arity }
-                          { waitForStopGuarded arity }})
-    ; unit
+                            waitForStopGuarded arity; unit}
+                          -- {  unit }})
+                          { (waitForStopGuarded arity); unit}})
 
-waitForGoGuarded : {Int -> [Console, Promise[Console, Yield], RefState, Yield]Unit}
+waitForGoGuarded : {Int -> [Promise[Console, Yield], Console, RefState, Yield] Pid Unit [Console, Yield, Promise[Console, Yield], RefState]}
 waitForGoGuarded arity =
     goGuarded arity;
     waitForStopGuarded arity

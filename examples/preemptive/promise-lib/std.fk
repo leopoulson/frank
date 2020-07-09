@@ -10,6 +10,11 @@ snd (pair _ y) = y
 
 data Maybe X = nothing | just X
 
+
+-- -- unsafe, obviously
+fromMaybe : {Maybe X -> X}
+fromMaybe (just x) = x
+
 map : {{X -> Y} -> List X -> List Y}
 map f []        = []
 map f (x :: xs) = f x :: map f xs

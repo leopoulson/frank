@@ -44,12 +44,13 @@ nextId cur xs =
 interface Promise  =
           promise R : Prom R [Promise, RefState, Yield] -> Pid R [Promise, RefState, Yield]
         | signal : Sig -> Unit
-        | await R : Pid R [Promise, RefState, Yield]-> R
+        | await R : Pid R [Promise, RefState, Yield] -> R
 
-data Prom R  = printCb {String -> R}
+-- data Prom R  = printCb {String -> R}
+data Prom R = prom {Sig -> R}
 
 ----- REMEMBER TO ADD EQSIG
-data Sig = printSig String
+data Sig = printSig String | intSig Int
 
 eqSig : {Sig -> Sig -> Bool}
 eqSig (printSig _) (printSig _) = true
@@ -71,29 +72,35 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
+echo : {Sig -> [Promise[Console], Console, Yield, RefState] Unit}
+echo (printSig x) = print "\n*- "; print x; print "\n"
+echo _ = (promise (prom echo)); unit
+
 printer : {[Promise[Console], Yield, Console] Unit}
 printer! = print "Printer starting\n";
-           promise (printCb { x -> print "\n*- "; print x ; print "\n"});
+           promise (prom echo);
            yield!;
-           promise (printCb { x -> print "\n*- 2 "; print x ; print "\n"});
-           yield!;
-           promise (printCb { x -> print "\n*- 3 "; print x ; print "\n"});
-           yield!;
+           -- promise (printCb { x -> print "\n*- 2 "; print x ; print "\n"});
+           -- yield!;
+           -- promise (printCb { x -> print "\n*- 3 "; print x ; print "\n"});
+           -- yield!;
            unit
 
-printer2: {[Promise[Console], Yield, Console] Unit}
-printer2! = print "Printer2 starting\n";
-           promise (printCb { x -> print "*-"; print " Two! "; print x ; print "\n"});
-           unit
+-- printer2: {[Promise[Console], Yield, Console] Unit}
+-- printer2! = print "Printer2 starting\n";
+--            promise (printCb { x -> print "*-"; print " Two! "; print x ; print "\n"});
+--            unit
 
 sender : {[Promise[Console], Yield, Console]Unit}
 sender! = print "Sender starting\n";
+          signal (intSig 2);
+          -- yield!;
           signal (printSig "One");
           yield!;
-          signal (printSig "Two");
-          yield!;
-          signal (printSig "Three");
-          yield!;
+          -- signal (printSig "Two");
+          -- yield!;
+          -- signal (printSig "Three");
+          -- yield!;
           unit
 
 catter : {[Console, Yield] Unit}
@@ -140,12 +147,13 @@ hdl : {Int -> Ref Threads
     -> [Yield, Console, RefState] Unit}
 
 -- WTF
-hdl thId thrs <promise (printCb cb) -> k> =
+hdl thId thrs <promise (prom cb) -> k> =
     -- print "installing promise\n";
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to general form
-    let cbMod = prepPrint (to_write cell cb) in
+    -- let cbMod = prepPrint (to_write cell cb) in
+    let cbMod = (to_write cell cb) in
 
     -- Handle callback alongside the rest of the computation.
     let cb3 = {sig rest -> { hdl thId thrs (cbMod sig; <Promise> rest!)}} in
@@ -184,12 +192,9 @@ hdl thId thrs <await cell -> thr> =
 
 hdl thId thrs unit = unit
 
--------------------------------------
--- Running
+-- -------------------------------------
+-- -- Running
 
--- -- unsafe, obviously
-fromMaybe : {Maybe X -> X}
-fromMaybe (just x) = x
 
 hdled : {[Console, RefState]Unit}
 hdled! =
@@ -205,12 +210,12 @@ hdled! =
         | (just runner) -> scheduleT ((<Console, RefState, Yield> runner!)!) 0 (thrs)}
 
 
--- -- -- Three threads, printing out cat names.
--- -- cats : {[Console]Unit}
--- -- cats! = scheduleQ ( print_yield "Beppy" )
--- --                   ( enqueue 1 { print_yield "Botsman" } (
--- --                            enqueue 2 { print_yield "Timmy"} qnil!
---                                    -- ) )
+-- -- -- -- Three threads, printing out cat names.
+-- -- -- cats : {[Console]Unit}
+-- -- -- cats! = scheduleQ ( print_yield "Beppy" )
+-- -- --                   ( enqueue 1 { print_yield "Botsman" } (
+-- -- --                            enqueue 2 { print_yield "Timmy"} qnil!
+-- --                                    -- ) )
 
 main : {[Console, RefState] Unit}
 main! = hdled!
