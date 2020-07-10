@@ -103,26 +103,21 @@ stopPromise arity (stop n) =
      { promise (prom ({s -> stopPromise arity s})); unit }
 stopPromise arity _ = await (promise (prom {s -> stopPromise arity s}))
 
+waitForGo : {Int -> [Promise[Console], Console, RefState, Yield] Unit}
+waitForGo arity =
+    await (promise (prom {s -> goPromise arity s}));
+    promise (prom {s -> stopPromise arity s});
+    unit
 
--- waitForStop : {[Console, Promise[Console], RefState, Yield]Unit}
--- waitForStop! = promise (prom stopPromise); unit
 
 thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
-thread1! = print "starting";
-           promise (prom {s -> stopPromise 0 s});
+thread1! = --promise (prom {s -> stopPromise 0 s});
+           waitForGo 0;
            counter 0
 
 thread2 : {[Promise[Console], Console, RefState, Yield] Unit}
-thread2! = print "starting";
-           promise (prom {s -> stopPromise 1 s});
+thread2! = waitForGo 1;
            counter2 0
-
--- controller : {[Promise [Console], Console, RefState, Yield] Unit}
--- controller! = print "\n*- Stop\n"; signal (stop 0);
---               sleepAndYield 400000;
---               print "\n*- Go\n"; signal (go 0);
---               sleepAndYield 400000;
---               controller!
 
 controller : {Int -> [Promise [Console], Console, RefState, Yield] Unit}
 controller k = print "\n*- Stop "; ouint k; print "\n";
@@ -138,6 +133,8 @@ sleepAndYield x = if (x < 0)
               { unit }
               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
+print_yield : String -> [Console, Yield]Unit
+print_yield str = print str; sleep 200000; yield!; print_yield str
 
 ----------------------------
 -- Callback utilities
@@ -156,13 +153,11 @@ hdl : {Int -> Ref Threads
     -> <Promise[Console]> Unit
     -> [Yield, Console, RefState] Unit}
 
--- WTF
 hdl thId thrs <promise (prom cb) -> k> =
     -- print "installing promise\n";
     -- Create new pid cell
     let cell = pid (new empty) in
     -- Process callback to convert to general form
-    -- let cbMod = prepPrint (to_write cell cb) in
     let cbMod = (to_write cell cb) in
 
     -- Handle callback alongside the rest of the computation.
@@ -175,13 +170,15 @@ hdl thId thrs <promise (prom cb) -> k> =
     write thrs (<Console, Yield, RefState>(writeThk thId res queued));
     (<Console, RefState, Yield> res!)!
 
--- So in this case, we want to go to each _thread_ and run the installed callbacks.
+-- So in this case, we want to go to each thread and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
     -- print "Executing signal\n";
     -- update the threads w/ new signal
     let readthrs = read thrs in
     let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
 
+    -- Yield to allow other threads to install promises
+    -- This probs shouldn't be here?
     let res = {{yield!; hdl thId thrs (thr unit)}} in
     write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
     (<Console, RefState, Yield> res!)!
@@ -209,9 +206,10 @@ hdl thId thrs unit = unit
 hdled : {[Console, RefState]Unit}
 hdled! =
     let thrs = new (tnil) in
-    write thrs (tentry 0 {{ hdl 0 thrs (thread1!) }} (tq [])
+    write thrs (tentry 0 {{ hdl 0 thrs (controller 0) }} (tq [])
                (tentry 1 {{ hdl 1 thrs (thread2!) }} (tq [])
-               ((tentry 2 {{ hdl 2 thrs ( controller 0) }} (tq []) tnil))));
+               ((tentry 2 {{ hdl 2 thrs (thread1!) }} (tq []) tnil))));
+
 
 
     let readthrs = read thrs in
@@ -221,12 +219,23 @@ hdled! =
         | (just runner) -> scheduleT ((<Console, RefState, Yield> runner!)!) 0 (thrs)}
 
 
--- -- -- -- -- Three threads, printing out cat names.
--- -- -- -- cats : {[Console]Unit}
--- -- -- -- cats! = scheduleQ ( print_yield "Beppy" )
--- -- -- --                   ( enqueue 1 { print_yield "Botsman" } (
--- -- -- --                            enqueue 2 { print_yield "Timmy"} qnil!
--- -- --                                    -- ) )
+-- Three threads, printing out cat names.
+-- cats : {[Console]Unit}
+-- cats! = scheduleQ ( print_yield "Beppy" )
+--                   ( enqueue 1 { print_yield "Botsman" } (
+--                            enqueue 2 { print_yield "Timmy"} qnil!
+                                -- ) )
+cats : {[Console, RefState] Unit}
+cats! =
+    let thrs = new (tentry 0 {{ <RefState> (print_yield "Beppy") }} (tq [])
+                   (tentry 1 {{ <RefState> (print_yield "Botsman") }} (tq [])
+                   (tentry 2 {{ <RefState> (print_yield "Timmy") }} (tq []) tnil))) in
+
+    let readthrs = read thrs in
+    let runner = <Console, RefState> (lookupThk 0 readthrs) in
+    case runner
+        { nothing -> unit
+        | (just runner) -> scheduleT (runner!)! 0 thrs}
 
 main : {[Console, RefState] Unit}
-main! = hdled!
+main! = cats!

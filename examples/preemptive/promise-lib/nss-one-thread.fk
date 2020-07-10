@@ -7,7 +7,6 @@ include threads_lib
 
 interface Yield = yield : Unit
 
--- ScheduleT schedules threads, but uses the threads structure for this.
 scheduleT : {<Yield> Unit -> Int -> Ref Threads -> [Console, RefState]Unit}
 scheduleT <yield -> k> cur thrs =
     -- Find which thread id is the next one to be ran.
@@ -49,7 +48,6 @@ interface Promise  =
 -- data Prom R  = printCb {String -> R}
 data Prom R = prom {Sig -> R}
 
------ REMEMBER TO ADD EQSIG
 data Sig = go | stop
 
 ----------------------------
