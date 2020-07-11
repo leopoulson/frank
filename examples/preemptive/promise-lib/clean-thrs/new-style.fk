@@ -48,12 +48,7 @@ interface Promise  =
 
 data Prom R  = printCb {String -> R}
 
------ REMEMBER TO ADD EQSIG
 data Sig = printSig String
-
-eqSig : {Sig -> Sig -> Bool}
-eqSig (printSig _) (printSig _) = true
-eqSig _ _ = false
 
 ----------------------------
 -- Pids
@@ -74,14 +69,11 @@ writePid (pid cell) x = write cell x
 printer : {[Promise[Console], Yield, Console] Unit}
 printer! = print "Printer starting\n";
            promise (printCb { x -> print "\n*- "; print x ; print "\n"});
-           print "installed one\n";
-           -- yield!;
+           yield!;
            promise (printCb { x -> print "\n*- 2 "; print x ; print "\n"});
-           print "installed two\n";
-           -- yield!;
+           yield!;
            promise (printCb { x -> print "\n*- 3 "; print x ; print "\n"});
-           print "installed three\n";
-           -- yield!;
+           yield!;
            unit
 
 printer2: {[Promise[Console], Yield, Console] Unit}
@@ -92,11 +84,11 @@ printer2! = print "Printer2 starting\n";
 sender : {[Promise[Console], Yield, Console]Unit}
 sender! = print "Sender starting\n";
           signal (printSig "One");
-          -- yield!;
+          yield!;
           signal (printSig "Two");
-          -- yield!;
+          yield!;
           signal (printSig "Three");
-          -- yield!;
+          yield!;
           unit
 
 catter : {[Console, Yield] Unit}
@@ -142,31 +134,24 @@ hdl : {Int -> Ref (Threads [Console, Yield, RefState])
     -> <Promise[Console]> Unit
     -> [Yield, Console, RefState] Unit}
 
--- -- WTF
 hdl thId thrs <promise (printCb cb) -> k> =
---     -- print "installing promise\n";
---     -- Create new pid cell
-    print"prom in";
+    -- Create new pid cell
     let cell = pid (new empty) in
---     -- Process callback to convert to general form
+    -- Process callback to convert to general form
     let cbMod = prepPrint (to_write cell cb) in
 
---     -- Handle callback alongside the rest of the computation.
+    -- Handle callback alongside the rest of the computation.
     let cb3 = {sig rest -> { hdl thId thrs (cbMod sig; <Promise> rest!)}} in
     let readthrs = read thrs in
     let queued = <Console, RefState, Yield>(addCb thId cb3 readthrs) in
-    -- let queued = (addCb thId cb3 readthrs) in
 
---     -- Write the resumption to the cell and resume.
+    -- Write the resumption to the cell and resume.
     let res = {(hdl thId thrs (k cell))} in
     write thrs (<Console, Yield, RefState>(writeThk thId res queued));
     res!
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
---     -- print "Executing signal\n";
---     -- update the threads w/ new signal
-    print "sig in";
     let readthrs = read thrs in
     let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
 
@@ -193,40 +178,25 @@ hdl thId thrs unit = unit
 -------------------------------------
 -- Running
 
--- emptyThrs : {Threads [Console, Yield, RefState]}
--- emptyThrs! = tnil
-
 thr1 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
 thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
 
 thr2 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
 thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
 
-blankthrs : {[RefState] Ref (Threads [Console, Yield, RefState])}
-blankthrs! = new tnil
-
--- progThrs : {[RefState] Ref (Threads [Console, Yield, RefState])}
--- progThrs! =
---     -- let thrs = new tnil in
---     let thrs = blankthrs! in
---     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq []) tnil);
-
--- --     write thrs (writeThk 0 (thr1 thrs) (read thrs));
-
--- --     -- write thrs (tentry 0 { hdl 0 thrs ( printer!) } (tq [])
--- --     --            (tentry 1 { hdl 1 thrs ( sender!) } (tq []) tnil));
---     thrs
-
-addThrs : {Ref (Threads [Console, Yield, RefState]) -> [RefState] Unit}
-addThrs thrs = write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
-                          (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil))
+-- All of these RefState adaptors are necessary, unfortunately.
+makeThreads : {[RefState] Ref (Threads [Console, Yield, RefState])}
+makeThreads! =
+    let thrs = new tnil in
+    write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
+               (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil));
+    thrs
 
 
 run : {Ref (Threads [Console, Yield, RefState]) -> [Console, RefState]Unit}
 run thrs =
     let readthrs = <Console>(read thrs) in
     let runner = <RefState, Console>(lookupThk 0 readthrs) in
-    print "T";
     case runner
         { nothing -> unit
         | (just runner) -> (scheduleT (runner!) 0 thrs) };
@@ -234,18 +204,8 @@ run thrs =
 
 hdled : {[Console, RefState]Unit}
 hdled! =
-    let thrs = <Console> blankthrs! in
-    <Console> (addThrs thrs);
+    let thrs = <Console> makeThreads! in
     run thrs
-    -- let readthrs = (read thrs) in
-    -- let runner = <RefState>(lookupThk 0 (readthrs)) in
-    -- case runner
-    --     { nothing -> unit
-    --     | (just runner) -> let rMod = { runner!} in
-    -- --                        -- (scheduleT (<Console(s a -> s a a)>(<RefState (s a -> s a a)> rMod!)) 0 (thrs))};
-    --                         (scheduleT (( rMod!)) 0 (thrs))};
-    -- unit
-
 
 
 main : {[Console, RefState] Unit}
