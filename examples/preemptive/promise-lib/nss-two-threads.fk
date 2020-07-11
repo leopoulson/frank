@@ -28,6 +28,9 @@ scheduleT <yield -> k> cur thrs =
 -- If the thread ends, just force a yield.
 scheduleT unit cur thrs = scheduleT yield! cur thrs
 
+
+
+
 -- Finds the next highest ID in threads.
 -- If there isn't one higher, i.e. the current is the max, finds the lowest.
 nextId : {Int -> List Int -> Int}
@@ -100,6 +103,7 @@ stopPromise arity (stop n) =
      -- Once go has been sent, we allow the thread to continue
      -- computing and reinstall the stop waiter.
      promise (prom {s -> stopPromise arity s}); unit}
+     -- If it's not for us, we reinstall the same promise.
      { promise (prom ({s -> stopPromise arity s})); unit }
 stopPromise arity _ = await (promise (prom {s -> stopPromise arity s}))
 
@@ -206,11 +210,16 @@ hdl thId thrs unit = unit
 hdled : {[Console, RefState]Unit}
 hdled! =
     let thrs = new (tnil) in
-    write thrs (tentry 0 {{ hdl 0 thrs (controller 0) }} (tq [])
-               (tentry 1 {{ hdl 1 thrs (thread2!) }} (tq [])
-               ((tentry 2 {{ hdl 2 thrs (thread1!) }} (tq []) tnil))));
-
-
+    -- 3 threads
+    -- write thrs (tentry 0 {{ hdl 0 thrs (thread1!) }} (tq [])
+    --            (tentry 1 {{ hdl 1 thrs (thread2!) }} (tq [])
+    --            (tentry 2 {{ hdl 2 thrs (controller 0) }} (tq []) tnil)));
+    -- 2 Threads
+    write thrs (tentry 0 {{ hdl 0 thrs (thread2!) }} (tq [])
+               (tentry 1 {{ hdl 1 thrs (controller 0) }} (tq [])
+               (tentry 2 {{ print_yield "Beppy " }} (tq [])
+               (tentry 3 {{ hdl 3 thrs (thread1!) }} (tq [])
+               (tnil)))));
 
     let readthrs = read thrs in
     let runner = <Console, RefState>(lookupThk 0 (readthrs)) in
@@ -225,17 +234,17 @@ hdled! =
 --                   ( enqueue 1 { print_yield "Botsman" } (
 --                            enqueue 2 { print_yield "Timmy"} qnil!
                                 -- ) )
-cats : {[Console, RefState] Unit}
-cats! =
-    let thrs = new (tentry 0 {{ <RefState> (print_yield "Beppy") }} (tq [])
-                   (tentry 1 {{ <RefState> (print_yield "Botsman") }} (tq [])
-                   (tentry 2 {{ <RefState> (print_yield "Timmy") }} (tq []) tnil))) in
+-- cats : {[Console, RefState] Unit}
+-- cats! =
+--     let thrs = new (tentry 0 {{ <RefState> (print_yield "Beppy") }} (tq [])
+--                    (tentry 1 {{ <RefState> (print_yield "Botsman") }} (tq [])
+--                    (tentry 2 {{ <RefState> (print_yield "Timmy") }} (tq []) tnil))) in
 
-    let readthrs = read thrs in
-    let runner = <Console, RefState> (lookupThk 0 readthrs) in
-    case runner
-        { nothing -> unit
-        | (just runner) -> scheduleT (runner!)! 0 thrs}
+--     let readthrs = read thrs in
+--     let runner = <Console, RefState> (lookupThk 0 readthrs) in
+--     case runner
+--         { nothing -> unit
+--         | (just runner) -> scheduleT (runner!)! 0 thrs}
 
 main : {[Console, RefState] Unit}
-main! = cats!
+main! = hdled!

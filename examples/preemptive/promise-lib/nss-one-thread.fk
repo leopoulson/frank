@@ -85,7 +85,7 @@ stopPromise stop =
      -- Once go has been sent, we allow the thread to continue
      -- computing and reinstall the stop waiter.
      waitForStop!
-stopPromise _ = await (promise (prom stopPromise))
+stopPromise _ = (promise (prom stopPromise)); unit
 
 
 waitForStop : {[Console, Promise[Console], RefState, Yield]Unit}

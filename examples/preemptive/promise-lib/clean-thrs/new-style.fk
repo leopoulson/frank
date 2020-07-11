@@ -7,8 +7,8 @@ include threads_lib
 
 interface Yield = yield : Unit
 
--- ScheduleT schedules threads, but uses the threads structure for this.
-scheduleT : {<Yield> Unit -> Int -> Ref Threads -> [Console, RefState]Unit}
+-- -- ScheduleT schedules threads, but uses the threads structure for this.
+scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Console, RefState, Yield]) -> [Console, RefState]Unit}
 scheduleT <yield -> k> cur thrs =
     -- Find which thread id is the next one to be ran.
     let readthrs = read thrs in
@@ -18,15 +18,15 @@ scheduleT <yield -> k> cur thrs =
     let newThk = <Console, RefState>(fromMaybe (lookupThk next (readthrs))) in
     -- Thunk the continuation
     -- Write this in the corresponding place in the threads structure
-    let newThrs = <Console, RefState>(writeThk cur {{k unit}} readthrs) in
+    let newThrs = <Console, RefState>(writeThk cur {k unit} readthrs) in
     write thrs newThrs;
 
-    -- Run the new thunk.
-    let newMod = <Console, RefState> newThk! in
-    scheduleT newMod! next thrs
+    scheduleT newThk! next thrs;
+    unit
 
 -- If the thread ends, just force a yield.
-scheduleT unit cur thrs = sleep 500000; scheduleT yield! cur thrs
+scheduleT unit cur thrs = scheduleT yield! cur thrs
+
 
 -- Finds the next highest ID in threads.
 -- If there isn't one higher, i.e. the current is the max, finds the lowest.
@@ -74,11 +74,14 @@ writePid (pid cell) x = write cell x
 printer : {[Promise[Console], Yield, Console] Unit}
 printer! = print "Printer starting\n";
            promise (printCb { x -> print "\n*- "; print x ; print "\n"});
-           yield!;
+           print "installed one\n";
+           -- yield!;
            promise (printCb { x -> print "\n*- 2 "; print x ; print "\n"});
-           yield!;
+           print "installed two\n";
+           -- yield!;
            promise (printCb { x -> print "\n*- 3 "; print x ; print "\n"});
-           yield!;
+           print "installed three\n";
+           -- yield!;
            unit
 
 printer2: {[Promise[Console], Yield, Console] Unit}
@@ -89,11 +92,11 @@ printer2! = print "Printer2 starting\n";
 sender : {[Promise[Console], Yield, Console]Unit}
 sender! = print "Sender starting\n";
           signal (printSig "One");
-          yield!;
+          -- yield!;
           signal (printSig "Two");
-          yield!;
+          -- yield!;
           signal (printSig "Three");
-          yield!;
+          -- yield!;
           unit
 
 catter : {[Console, Yield] Unit}
@@ -135,79 +138,115 @@ print_yield st = print st; print "\n";
 ----- Handling Promises
 ----------------------------
 
-hdl : {Int -> Ref Threads
+hdl : {Int -> Ref (Threads [Console, Yield, RefState])
     -> <Promise[Console]> Unit
     -> [Yield, Console, RefState] Unit}
 
--- WTF
+-- -- WTF
 hdl thId thrs <promise (printCb cb) -> k> =
-    -- print "installing promise\n";
-    -- Create new pid cell
+--     -- print "installing promise\n";
+--     -- Create new pid cell
+    print"prom in";
     let cell = pid (new empty) in
-    -- Process callback to convert to general form
+--     -- Process callback to convert to general form
     let cbMod = prepPrint (to_write cell cb) in
 
-    -- Handle callback alongside the rest of the computation.
+--     -- Handle callback alongside the rest of the computation.
     let cb3 = {sig rest -> { hdl thId thrs (cbMod sig; <Promise> rest!)}} in
     let readthrs = read thrs in
     let queued = <Console, RefState, Yield>(addCb thId cb3 readthrs) in
+    -- let queued = (addCb thId cb3 readthrs) in
 
-    -- Write the resumption to the cell and resume.
-    let res = {{(hdl thId thrs (k cell))}} in
+--     -- Write the resumption to the cell and resume.
+    let res = {(hdl thId thrs (k cell))} in
     write thrs (<Console, Yield, RefState>(writeThk thId res queued));
-    (<Console, RefState, Yield> res!)!
+    res!
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
-    -- print "Executing signal\n";
-    -- update the threads w/ new signal
+--     -- print "Executing signal\n";
+--     -- update the threads w/ new signal
+    print "sig in";
     let readthrs = read thrs in
     let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
 
-    let res = {{hdl thId thrs (thr unit)}} in
+    let res = {hdl thId thrs (thr unit)} in
     write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
-    (<Console, RefState, Yield> res!)!
+    res!
 
 hdl thId thrs <await cell -> thr> =
     case (readPid cell)
          { (done x) ->
                  let readthrs = read thrs in
-                 let res = {{hdl thId thrs (thr x)}} in
+                 let res = {hdl thId thrs (thr x)} in
                  write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
-                 (<Console, RefState, Yield> res!)!
+                 res!
          -- thr2 has Fork in ambient, but addRes won't allow that.
          | empty -> writePid cell (addRes thr);
                  let readthrs = read thrs in
-                 let res = {{hdl thId thrs unit}} in
+                 let res = {hdl thId thrs unit} in
                  write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
-                 (<Console, RefState, Yield> res!)!}
+                 res!}
 
 hdl thId thrs unit = unit
 
 -------------------------------------
 -- Running
 
+-- emptyThrs : {Threads [Console, Yield, RefState]}
+-- emptyThrs! = tnil
+
+thr1 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
+
+thr2 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
+
+blankthrs : {[RefState] Ref (Threads [Console, Yield, RefState])}
+blankthrs! = new tnil
+
+-- progThrs : {[RefState] Ref (Threads [Console, Yield, RefState])}
+-- progThrs! =
+--     -- let thrs = new tnil in
+--     let thrs = blankthrs! in
+--     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq []) tnil);
+
+-- --     write thrs (writeThk 0 (thr1 thrs) (read thrs));
+
+-- --     -- write thrs (tentry 0 { hdl 0 thrs ( printer!) } (tq [])
+-- --     --            (tentry 1 { hdl 1 thrs ( sender!) } (tq []) tnil));
+--     thrs
+
+addThrs : {Ref (Threads [Console, Yield, RefState]) -> [RefState] Unit}
+addThrs thrs = write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
+                          (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil))
+
+
+run : {Ref (Threads [Console, Yield, RefState]) -> [Console, RefState]Unit}
+run thrs =
+    let readthrs = <Console>(read thrs) in
+    let runner = <RefState, Console>(lookupThk 0 readthrs) in
+    print "T";
+    case runner
+        { nothing -> unit
+        | (just runner) -> (scheduleT (runner!) 0 thrs) };
+    unit
 
 hdled : {[Console, RefState]Unit}
 hdled! =
-    let thrs = new (tnil) in
-    write thrs (tentry 0 {{ hdl 0 thrs (<RefState> printer!) }} (tq [])
-               (tentry 1 {{ hdl 1 thrs (<RefState> sender!) }} (tq []) tnil));
+    let thrs = <Console> blankthrs! in
+    <Console> (addThrs thrs);
+    run thrs
+    -- let readthrs = (read thrs) in
+    -- let runner = <RefState>(lookupThk 0 (readthrs)) in
+    -- case runner
+    --     { nothing -> unit
+    --     | (just runner) -> let rMod = { runner!} in
+    -- --                        -- (scheduleT (<Console(s a -> s a a)>(<RefState (s a -> s a a)> rMod!)) 0 (thrs))};
+    --                         (scheduleT (( rMod!)) 0 (thrs))};
+    -- unit
 
 
-    let readthrs = read thrs in
-    let runner = <Console, RefState>(lookupThk 0 (readthrs)) in
-    case runner
-        { nothing -> unit
-        | (just runner) -> scheduleT ((<Console, RefState, Yield> runner!)!) 0 (thrs)}
-
-
--- -- -- Three threads, printing out cat names.
--- -- cats : {[Console]Unit}
--- -- cats! = scheduleQ ( print_yield "Beppy" )
--- --                   ( enqueue 1 { print_yield "Botsman" } (
--- --                            enqueue 2 { print_yield "Timmy"} qnil!
---                                    -- ) )
 
 main : {[Console, RefState] Unit}
 main! = hdled!
