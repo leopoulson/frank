@@ -5,11 +5,11 @@ include threads_lib
 ---------------------
 -- Scheduling
 
-interface Yield = yield : Unit
+-- interface Yield = yield : Unit
 
 -- -- ScheduleT schedules threads, but uses the threads structure for this.
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Console, RefState, Yield]) -> [Console, RefState]Unit}
-scheduleT <yield -> k> cur thrs =
+scheduleT <yield -> k> cur thrs = print "hdled";
     -- Find which thread id is the next one to be ran.
     let readthrs = read thrs in
     let next = <Console, RefState> (nextId cur (keys readthrs)) in
@@ -70,14 +70,14 @@ writePid (pid cell) x = write cell x
 
 counter : {Int -> [Console, Yield]Unit}
 counter x = ouint x; print " ";
-            sleep 200000;
-            yield!;
+            sleepMany 200000;
+            -- yield!;
             counter (x + 1)
 
 counter2 : {Int -> [Console, Yield]Unit}
 counter2 x = ouch (toc x); print " ";
-             sleep 200000;
-             yield!;
+             sleepMany 200000;
+             -- yield!;
              counter2 (x + 1)
 
 goPromise : {Int -> Sig -> Maybe {[Promise[Console], Console, Yield, RefState]Unit}}
@@ -116,7 +116,6 @@ waitForGo arity =
     promise (prom {s -> stopPromise arity s});
     unit
 
-
 thread1 : {[Promise[Console], Console, RefState, Yield] Unit}
 thread1! = --promise (prom {s -> stopPromise 0 s});
            waitForGo 0;
@@ -131,14 +130,16 @@ controller k = print "\n*- Stop "; ouint k; print "\n";
                signal (stop k);
                print "*- Go "; ouint (k + 1); print "\n";
                signal (go (k + 1));
-               sleepAndYield 400000;
+               sleepMany 400000;
                controller (k + 1)
 
 -- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
-sleepAndYield : Int -> [Console, Yield]Unit
-sleepAndYield x = if (x < 0)
+sleepMany : Int -> [Console, Yield]Unit
+sleepMany x = if (x < 0)
               { unit }
-              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+              { sleep 2000 ;
+                -- yield!;
+                sleepMany (x - 2000) }
 
 ----------------------------
 -- Callback utilities
@@ -247,6 +248,12 @@ hdled! =
     let thrs = <Console> makeThreads! in
     run thrs
 
+-- simpleYield : {<Yield> Unit -> Unit}
+-- simpleYield <yield -> k> = simpleYield (k unit)
+-- simpleYield unit = unit
+
+-- main : {[Console, RefState] Unit}
+-- main! = simpleYield hdled!
 
 main : {[Console, RefState] Unit}
 main! = hdled!
