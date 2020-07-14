@@ -3,7 +3,8 @@ interface Es = [Console, RefState, Yield]
 data TQueue X = tq (List X)
 
 enqueue : {X -> TQueue X -> TQueue X}
-enqueue x (tq xs) = tq (snoc xs x)
+-- enqueue x (tq xs) = tq (snoc xs x)
+enqueue x (tq xs) = tq (x :: xs)
 
 dequeue : {TQueue X -> Maybe (Pair X (TQueue X))}
 dequeue (tq []) = nothing
