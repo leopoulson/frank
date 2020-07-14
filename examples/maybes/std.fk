@@ -92,6 +92,10 @@ reverse : {List X -> List X}
 reverse xs = reverse' xs []
 --- end of standard stuff ---
 
+mul : Int -> Int -> Int
+mul x 0 = 0
+mul x y = x + mul x (y - 1)
+
 fold : {X -> Y -> Y} -> Y -> List X -> Y
 fold f e nil = e
 fold f e (x :: xs) = f x (fold f e xs)

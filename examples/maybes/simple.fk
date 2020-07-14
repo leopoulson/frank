@@ -74,15 +74,21 @@ writePid (pid cell) x = write cell x
 
 printer : {[Promise[Console], Yield, Console] Unit}
 printer! = print "Printer starting\n";
-           promise (prom { (printSig x) -> just {print "\n*- "; print x ; print "\n"}
+           promise (prom { (printSig x) -> just {print "\n*- First "; print x ; print "\n"}
+                         | _ -> nothing});
+           promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ; print "\n"}
+                         | _ -> nothing});
+           promise (prom { (printSig x) -> just {print "\n*- Third "; print x ; print "\n"}
                          | _ -> nothing});
            unit
 
 
 sender : {[Promise[Console], Yield, Console]Unit}
 sender! = print "Sender starting\n";
-          signal otherSig;
-          signal (printSig "Hey!");
+          -- signal otherSig;
+          signal (printSig "One");
+          signal (printSig "Two");
+          signal (printSig "Three");
           unit
 
 catter : {[Console, Yield] Unit}
@@ -151,9 +157,7 @@ hdl thId thrs <promise (prom cb) -> k> =
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
     let readthrs = read thrs in
-    print "running threads";
     let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
-    print "done running";
 
     let res = {hdl thId thrs (thr unit)} in
     write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
