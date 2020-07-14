@@ -1,0 +1,233 @@
+include std
+
+include threads_lib
+
+---------------------
+-- Scheduling
+
+interface Yield = yield : Unit
+
+-- -- ScheduleT schedules threads, but uses the threads structure for this.
+scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Console, RefState, Yield]) -> [Console, RefState]Unit}
+scheduleT <yield -> k> cur thrs =
+    -- Find which thread id is the next one to be ran.
+    let readthrs = read thrs in
+    let next = <Console, RefState> (nextId cur (keys readthrs)) in
+
+    -- Look up this new thunk.
+    let newThk = <Console, RefState>(fromMaybe (lookupThk next (readthrs))) in
+    -- Thunk the continuation
+    -- Write this in the corresponding place in the threads structure
+    let newThrs = <Console, RefState>(writeThk cur {k unit} readthrs) in
+    write thrs newThrs;
+
+    scheduleT newThk! next thrs;
+    unit
+
+-- If the thread ends, just force a yield.
+scheduleT unit cur thrs = scheduleT yield! cur thrs
+
+
+-- Finds the next highest ID in threads.
+-- If there isn't one higher, i.e. the current is the max, finds the lowest.
+nextId : {Int -> List Int -> Int}
+nextId cur xs =
+   let lgt = leastGT cur 100 xs in
+   if (lgt == 100) -- i.e. cur is max
+       { lowest 100 xs }
+       { lgt }
+
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E | Promise[E|], RefState, Yield] -> Pid R [E | Promise[E|], RefState, Yield]
+        | signal : Sig -> Unit
+        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
+
+-- Any effects will be performed in the returned comp.
+-- Any guard conditions should NOT have effects in.
+data Prom R [E] = prom {Sig -> Maybe {[E|]R}}
+
+data Sig = listSig (List Int) | resultSig
+
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = empty | done X | addRes {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+interface Effs = [Promise[Console], Console, RefState, Yield]
+
+printList : {List Int -> [Console] Unit}
+printList [] = print "∅\n"
+printList (x :: xs) = ouint x; print ", "; printList xs
+
+filter : {{X -> Bool} -> List X -> List X}
+filter _ [] = []
+filter p (x :: xs) = if (p x) { x :: filter p xs } { filter p xs }
+
+filterPositive : {List Int -> List Int}
+filterPositive xs = filter ({x -> x > 0}) xs
+
+processWithBody : {Pid R [Effs] -> {R -> Z} -> [Effs] Z}
+processWithBody p comp =
+    print "Processing with"; let res = await p in
+    <Promise, Console, RefState, Yield>(comp res)
+
+
+process_with : {Pid R [Effs] -> {R -> Z} -> Sig -> Maybe {[Effs] Z}}
+process_with p comp (listSig _) =
+    just { processWithBody p comp }
+process_with _ _ _ = nothing
+
+
+
+
+printer : {[Promise[Console], Yield, Console] Unit}
+printer! = print "Printer starting\n";
+           let recv = promise (prom { (listSig xs) -> just {printList xs; xs}
+                                    | _ -> nothing}) in
+           promise (prom ({ s -> process_with recv filterPositive s }));
+           unit
+
+
+sender : {[Promise[Console], Yield, Console]Unit}
+sender! = print "Sender starting\n";
+          signal (listSig [1, 2, 3]);
+          unit
+
+catter : {[Console, Yield] Unit}
+catter! = print "Beppy\n";
+          sleep 200000;
+          yield!;
+          catter!
+         
+
+-- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
+sleepAndYield : Int -> [Console, Yield]Unit
+sleepAndYield x = if (x < 0)
+              { unit }
+              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+
+
+----------------------------
+-- Callback utilities
+
+to_writeM2 : Pid R [E|RefState]
+          -> {S -> (Maybe {[E|RefState] R})}
+          -> {S -> (Maybe {[E|RefState] Unit})}
+to_writeM2 (pid cell) cb =
+    {x -> case (cb x)
+         { nothing -> nothing
+         | (just susp) ->
+             just {case (read cell)
+                      { empty -> write cell (done susp!)
+                      | (addRes resumption) -> resumption susp!}} }}
+
+
+print_yield : {String -> [Console, Yield]Unit}
+print_yield st = print st; print "\n";
+                 sleep 250000;
+                 yield!;
+                 print_yield st
+
+
+----------------------------
+----- Handling Promises
+----------------------------
+
+hdl : {Int -> Ref (Threads [Console, Yield, RefState])
+    -> <Promise[Console]> Unit
+    -> [Yield, Console, RefState] Unit}
+
+hdl thId thrs <promise (prom cb) -> k> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to general form
+    let cbMod = <Console, RefState, Yield>(to_writeM2 cell cb) in
+
+    -- Handle callback alongside the rest of the computation.
+    let cbMaybe = {sig rest -> (case ((cbMod sig))
+                                   { nothing -> nothing
+                                   | (just susp) -> just { (hdl thId thrs (susp!; <Promise> rest!)) } })} in
+
+    let readthrs = read thrs in
+    let queued = <Console, RefState, Yield>(addCb thId (cbMaybe) readthrs) in
+
+    -- Write the resumption to the cell and resume.
+    let res = {(hdl thId thrs (k cell))} in
+    write thrs (<Console, Yield, RefState>(writeThk thId res queued));
+    res!
+
+-- So in this case, we want to go to each _thread_ and run the installed callbacks.
+hdl thId thrs <signal sig -> thr> =
+    let readthrs = read thrs in
+    let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
+
+    let res = {hdl thId thrs (thr unit)} in
+    write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
+    res!
+
+hdl thId thrs <await cell -> thr> =
+    case (readPid cell)
+         { (done x) ->
+                 let readthrs = read thrs in
+                 let res = {hdl thId thrs (thr x)} in
+                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
+                 res!
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
+                 let readthrs = read thrs in
+                 let res = {hdl thId thrs unit} in
+                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
+                 res!}
+
+hdl thId thrs unit = unit
+
+-------------------------------------
+-- Running
+
+thr1 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
+
+thr2 : {Ref (Threads [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
+
+-- All of these RefState adaptors are necessary, unfortunately.
+makeThreads : {[RefState] Ref (Threads [Console, Yield, RefState])}
+makeThreads! =
+    let thrs = new tnil in
+    write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
+               (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil));
+    thrs
+
+
+run : {Ref (Threads [Console, Yield, RefState]) -> [Console, RefState]Unit}
+run thrs =
+    let readthrs = <Console>(read thrs) in
+    let runner = <RefState, Console>(lookupThk 0 readthrs) in
+    case runner
+        { nothing -> unit
+        | (just runner) -> (scheduleT (runner!) 0 thrs) };
+    unit
+
+hdled : {[Console, RefState]Unit}
+hdled! =
+    let thrs = <Console> makeThreads! in
+    run thrs
+
+
+main : {[Console, RefState] Unit}
+main! = hdled!
