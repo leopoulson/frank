@@ -1,0 +1,64 @@
+interface Es = [Console, RefState, Yield]
+
+data TQueue X = tq (List X)
+
+enqueue : {X -> TQueue X -> TQueue X}
+enqueue x (tq xs) = tq (snoc xs x)
+
+dequeue : {TQueue X -> Maybe (Pair X (TQueue X))}
+dequeue (tq []) = nothing
+dequeue (tq (x :: xs)) = just (pair x (tq xs))
+
+data Threads [E] = tentry Int {[E|] Unit} (TQueue {Sig -> {[E|] Unit} -> Maybe {[E|] Unit}}) (Threads [E|])
+                 | tnil
+
+keys : {Threads [E|] -> List Int}
+keys tnil = []
+keys (tentry k _ _ rest) = k :: keys rest
+
+-- Adds a callback cb for thread id k
+addCb : {Int -> {Sig -> {[E|] Unit} -> Maybe {[E|] Unit}} -> Threads [E|] -> Threads [E|]}
+addCb k cb tnil = tnil
+addCb k cb (tentry k' thk q rest) =
+   if (k == k')
+     { tentry k' thk (enqueue cb q) rest }
+     { tentry k' thk q (addCb k cb rest) }
+
+writeThk : {Int -> {[E|] Unit} -> Threads [E|] -> Threads [E|]}
+writeThk _ _ tnil = tnil
+writeThk k newThk (tentry k' thk q rest) =
+    if (k == k')
+      { tentry k' newThk q rest }
+      { tentry k' thk q (writeThk k newThk rest) }
+
+
+
+lookupThk : {Int -> Threads [E|] -> Maybe {[E|] Unit}}
+lookupThk k tnil = nothing
+lookupThk k (tentry k' thk _ rest) =
+    if (k == k')
+      { just thk }
+      { lookupThk k rest }
+
+
+runThreads : {Sig -> Threads [E|] -> Threads [E|]}
+runThreads _ (tnil) = tnil
+runThreads sig (tentry k susp cbs rest) =
+    -- Run the given thread w/ the incoming signal.
+    let pUp = <Console>(runThread sig (trio susp cbs (tq []))) in
+    -- Do the same on the rest of them.
+    tentry k (fstT pUp) (thdT pUp) (runThreads sig rest)
+
+runThread : {Sig -> Trio {[E|] Unit}
+                         (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
+                         (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
+          -> (Trio {[E|] Unit}
+                  (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
+                  (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}}))}
+runThread sig (trio susp cbs skipped) =
+    case (dequeue cbs)
+        -- If we have nothing left to run, just stop and return.
+        { nothing -> trio susp cbs skipped
+        | (just (pair cb cbs)) -> case (cb sig susp)
+                                     { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
+                                     | (just susp2) -> runThread sig (trio susp2 cbs skipped)}}

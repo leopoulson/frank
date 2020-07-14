@@ -8,6 +8,17 @@ fst (pair x _) = x
 snd : Pair X Y -> Y
 snd (pair _ y) = y
 
+data Trio X Y Z = trio X Y Z
+
+fstT : Trio X Y Z -> X
+fstT (trio x _ _) = x
+
+sndT : Trio X Y Z -> Y
+sndT (trio _ y _) = y
+
+thdT : Trio X Y Z -> Z
+thdT (trio _ _ z) = z
+
 data Maybe X = nothing | just X
 
 

@@ -1,0 +1,235 @@
+include std
+
+include threads_lib
+
+---------------------
+-- Scheduling
+
+interface Yield = yield : Unit
+
+-- -- ScheduleT schedules threads, but uses the threads structure for this.
+scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Web, Console, RefState, Yield]) -> [Web, Console, RefState]Unit}
+scheduleT <yield -> k> cur thrs =
+    -- Find which thread id is the next one to be ran.
+    let readthrs = read thrs in
+    let next = <Console, RefState, Web> (nextId cur (keys readthrs)) in
+
+    -- Look up this new thunk.
+    let newThk = <Console, RefState, Web>(fromMaybe (lookupThk next (readthrs))) in
+    -- Thunk the continuation
+    -- Write this in the corresponding place in the threads structure
+    let newThrs = <Console, RefState, Web>(writeThk cur {k unit} readthrs) in
+    write thrs newThrs;
+
+    scheduleT newThk! next thrs;
+    unit
+
+-- If the thread ends, just force a yield.
+scheduleT unit cur thrs = scheduleT yield! cur thrs
+
+
+-- Finds the next highest ID in threads.
+-- If there isn't one higher, i.e. the current is the max, finds the lowest.
+nextId : {Int -> List Int -> Int}
+nextId cur xs =
+   let lgt = leastGT cur 100 xs in
+   if (lgt == 100) -- i.e. cur is max
+       { lowest 100 xs }
+       { lgt }
+
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E | Promise[E|], RefState, Yield] -> Pid R [E | Promise[E|], RefState, Yield]
+        | signal : Sig -> Unit
+        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
+
+-- Any effects will be performed in the returned comp.
+-- Any guard conditions should NOT have effects in.
+data Prom R [E] = prom {Sig -> Maybe {[E|]R}}
+
+data Sig = call {[Console, Web] String} Int | result String Int
+
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = empty | done X | addRes {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+-- Alias for all of the requisite threads.
+interface WebThreads = [Promise[Web, Console], Console, Web, RefState, Yield]
+
+-- This is the remote web request
+remoteRequest : {String -> [Web]String}
+remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
+
+-- Doesn't fire if the callnumber doesn't match.
+resultWaiter : {Int -> [Promise[Web, Console]] Pid String [WebThreads]}
+resultWaiter callNo = promise (prom { (result res callNo') -> if (callNo == callNo') { just {res} } {nothing}
+                                    | _ -> nothing})
+
+-- Caller takes a process and a callID
+-- it sends a signal to run the process, then installs a promise to wait the result.
+async : {{[Console, Web] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]}
+async proc callCounter =
+    let callNo = read callCounter in
+    -- Install the result waiter before we call.
+    let waiter = <Console, RefState, Web, Yield>(resultWaiter callNo) in
+    -- Then make the request to perform proc
+    signal (call proc callNo);
+    -- Increment callcounter
+    write callCounter (callNo + 1);
+    -- and return the waiter.
+    waiter
+
+onRun : {{[Console, Web] String} -> Int -> [WebThreads] Unit}
+onRun proc callId =
+    -- First, run the process
+    let res = <Promise, RefState, Yield>(proc)! in
+    -- Then we want to send a result message w/ the same callId
+    signal (result res callId);
+    -- Then finally we reinstall the runner.
+    <Console, RefState, Web, Yield> runner!;
+    -- and return unit.
+    unit
+
+runProm : {Sig -> Maybe {[WebThreads] Unit}}
+runProm (call proc callId) = just { onRun proc callId }
+runProm _ = nothing
+
+-- Runner needs to wait for call messages to come in. When they do, it should
+-- run the process and return.
+runner : {[Promise[Web, Console]] Pid Unit [WebThreads]}
+runner! = promise (prom runProm)
+
+caller : {[WebThreads] Unit}
+caller! =
+    print "Caller starting\n";
+    let callCounter = new 0 in
+    let p1 = async {print "*- Hey!\n"; "bye!"} callCounter in
+    print "Wowzer - in the middle!\n";
+    print (await p1)
+
+
+----------------------------
+-- Callback utilities
+
+to_writeM2 : Pid R [E|RefState]
+          -> {S -> (Maybe {[E|RefState] R})}
+          -> {S -> (Maybe {[E|RefState] Unit})}
+to_writeM2 (pid cell) cb =
+    {x -> case (cb x)
+         { nothing -> nothing
+         | (just susp) ->
+             just {case (read cell)
+                      { empty -> write cell (done susp!)
+                      | (addRes resumption) -> resumption susp!}} }}
+
+
+print_yield : {String -> [Console, Yield]Unit}
+print_yield st = print st; print "\n";
+                 sleep 250000;
+                 yield!;
+                 print_yield st
+
+
+----------------------------
+----- Handling Promises
+----------------------------
+
+hdl : {Int -> Ref (Threads [Web, Console, Yield, RefState])
+    -> <Promise[Web, Console]> Unit
+    -> [Web, Console, Yield, RefState] Unit}
+
+hdl thId thrs <promise (prom cb) -> k> =
+    -- Create new pid cell
+    let cell = pid (new empty) in
+    -- Process callback to convert to general form
+    let cbMod = <Web, Console, RefState, Yield>(to_writeM2 cell cb) in
+
+    -- -- Handle callback alongside the rest of the computation.
+    let cbMaybe = {sig rest -> (case ((cbMod sig))
+                                   { nothing -> nothing
+                                   | (just susp) -> just { (hdl thId thrs ((susp)!; <Promise> rest!)) } })} in
+
+    let readthrs = read thrs in
+    let queued = <Web, Console, RefState, Yield>(addCb thId (cbMaybe) readthrs) in
+
+    -- Write the resumption to the cell and resume.
+    let res = {(hdl thId thrs (k cell))} in
+    write thrs (<Web, Console, Yield, RefState>(writeThk thId res queued));
+    res!;
+    unit
+
+-- So in this case, we want to go to each _thread_ and run the installed callbacks.
+hdl thId thrs <signal sig -> thr> =
+    let readthrs = read thrs in
+    let newThrs = <Web, Console, Yield, RefState>(runThreads sig (readthrs)) in
+
+    let res = {hdl thId thrs (thr unit)} in
+    write thrs (<Web, Console, Yield, RefState>(writeThk thId res newThrs));
+    res!
+
+hdl thId thrs <await cell -> thr> =
+    case (readPid cell)
+         { (done x) ->
+                 let readthrs = read thrs in
+                 let res = {hdl thId thrs (thr x)} in
+                 write thrs (<Web, Console, Yield, RefState>(writeThk thId res readthrs));
+                 res!
+         -- thr2 has Fork in ambient, but addRes won't allow that.
+         | empty -> writePid cell (addRes thr);
+                 let readthrs = read thrs in
+                 let res = {hdl thId thrs unit} in
+                 write thrs (<Web, Console, Yield, RefState>(writeThk thId res readthrs));
+                 res!}
+
+hdl thId thrs unit = unit
+
+-------------------------------------
+-- Running
+
+thr0 : {Ref (Threads [Web, Console, Yield, RefState]) -> {[Web, Console, Yield, RefState] Unit}}
+thr0 thrs = {hdl 0 thrs (<Console, Web, Yield, RefState> runner!; unit) }
+
+thr1 : {Ref (Threads [Web, Console, Yield, RefState]) -> {[Web, Console, Yield, RefState] Unit}}
+thr1 thrs = {hdl 1 thrs (caller!) }
+
+-- All of these RefState adaptors are necessary, unfortunately.
+makeThreads : {[RefState] Ref (Threads [Web, Console, Yield, RefState])}
+makeThreads! =
+    let thrs = new tnil in
+    write thrs (tentry 0 (<RefState> (thr0 thrs)) (tq [])
+               (tentry 1 (<RefState> (thr1 thrs)) (tq []) tnil));
+    thrs
+
+run : {Ref (Threads [Web, Console, Yield, RefState]) -> [Web, Console, RefState]Unit}
+run thrs =
+    let readthrs = <Console>(read thrs) in
+    let runner = <Web, RefState, Console>(lookupThk 0 readthrs) in
+    case runner
+        { nothing -> unit
+        | (just runner) -> (scheduleT (runner!) 0 thrs) };
+    unit
+
+hdled : {[Web, Console, RefState]Unit}
+hdled! =
+    let thrs = <Web, Console> makeThreads! in
+    run thrs
+
+
+main : {[Web, Console, RefState] Unit}
+-- main! = print "running"; hdled!
+main! = hdled!

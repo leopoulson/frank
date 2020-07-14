@@ -87,7 +87,8 @@ asyncCoRef p <await (promise r) -> k> =
 
 runAsync : {<Async [CoRef]>X -> [RefState]X}
 runAsync <m> = let r = new (waiting []) in
-               bfFifo (asyncCoRef (promise r) (<Co> m!));
+               -- bfFifo (asyncCoRef (promise r) (<Co> m!));
+               scheduleNow (asyncCoRef (promise r) (<Co> m!));
 
                -- For the promise to be fullfilled now depends on all
                -- handlers in sight using their continuations
@@ -122,6 +123,13 @@ scheduleBF <yield -> k>  = enqProc {scheduleBF (k unit)};
 scheduleBF <fork p -> k> = enqProc {scheduleBF (<Queue> p!)};
                            scheduleBF (k unit)
 scheduleBF unit          = runNext!
+
+-- schedule by just immediately running forked thread
+scheduleNow : {<Co>Unit -> Unit}
+scheduleNow <yield -> k>  = scheduleNow (k unit)
+-- scheduleNow <fork p -> k> = scheduleNow (p!; k unit)
+scheduleNow <fork p -> k> = scheduleNow (k unit; p!)
+scheduleNow unit          = unit
 
 ------------------------------------------------------------------------------
 -- Concurrent Async programs
