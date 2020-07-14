@@ -127,13 +127,9 @@ compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save
 compute g (SApp f as amb)    ls   =
   do now <- get;
      -- So now we only insert a yield if counter is over 200 and the term is
-     -- allowed to yield.
+     -- allowed to yield. `amb` is the ambient ability at that application.
      if (now > 400 && ("Yield" `elem` amb))
        then do modify (\x -> x - 400)
-
-               -- trace ("\n*** Inserting yield in " ++ show f ++ "$" ++ show as ++ " / " ++ show amb ++ "\n") $
-               --   compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
-
                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
@@ -310,7 +306,7 @@ makeArgs g comps = foldr maker (g, []) (zip [0..] comps)
 -- Given a position - for fresh names - and a comp, return the updated env and
 -- the corresponding exp
 makeExp :: Int -> Comp -> Env -> (Env, Exp)
--- So for a value, we create a fresh name and bind the value to this?
+-- So for a value, we create a fresh name and bind the value to this
 makeExp n (Ret v) g = let name = freshName n in (g :/ [name := v], EV name)
 -- For a yield, we know that vs will always be empty (it's 0-ary)
 -- Then we just bind the continuations to the name, in env,
@@ -318,13 +314,11 @@ makeExp n (Ret v) g = let name = freshName n in (g :/ [name := v], EV name)
 makeExp n (Call "yield" _ [] ks) g =
   let name = freshName n in
     -- apply `unit` to name.
-    -- (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
     (g :/ [name := VK ks], SApp (EV name) [SApp (EV "unit") [] []] [])
 -- If it's any other sort of call, bind the name to the call in the env, and
--- invoke the cont. 0-arily.
+-- invoke the continuation 0-arily.
 makeExp n call g =
   let name = freshName n in
-    -- (g :/ [name := VC call], EV name :$ [])
     (g :/ [name := VC call], SApp (EV name) [] [])
 
 

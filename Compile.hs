@@ -36,11 +36,9 @@ type ItfCmdMap = M.Map Id [Id]
 
 data CState = MkCState { imap :: ItfCmdMap
                        , atoms :: S.Set String
-                       -- , yieldable :: Bool
                        , amb :: [Id] }
 
 initCState :: CState
--- initCState = MkCState M.empty S.empty False
 initCState = MkCState M.empty S.empty []
 
 getCState :: Compile CState
@@ -48,14 +46,6 @@ getCState = get
 
 putCState :: CState -> Compile ()
 putCState = put
-
--- canYield :: Compile Bool
--- canYield = do s <- getCState
---               return (yieldable s)
-
--- writeYieldable :: Bool -> Compile ()
--- writeYieldable x = do s <- getCState
---                       putCState $ s { yieldable = x }
 
 writeAmb :: [Id] -> Compile ()
 writeAmb x = do s <- getCState
@@ -128,34 +118,26 @@ compileCtr (Ctr id ts _) =
 -- use the type to generate the signature of commands handled
 -- generate a clause 1-to-1 correspondence
 compileMHDef :: MHDef Desugared -> Compile (S.Def S.Exp)
-compileMHDef (Def id ty xs _) =
-                                do
-                                 -- (yable, tyRep) <- trace ("Compiling " ++ id) $ compileCType ty
-                                 (amb, tyRep) <- compileCType ty
-                                 writeAmb amb
-                                 xs' <- mapM compileClause xs
+compileMHDef (Def id ty xs _) = do (amb, tyRep) <- compileCType ty
+                                   writeAmb amb
+                                   xs' <- mapM compileClause xs
 
-                                 -- trace ("MH " ++ id ++ " handles " ++ show tyRep ++ "\n") $
-                                 (return $ S.DF id tyRep xs')
+                                   (return $ S.DF id tyRep xs')
 
 compileCType :: CType Desugared -> Compile ([Id], [([S.Adap], [String])])
 compileCType (CType xs peg _) =
-  do ab <- pegYields peg;
+  do ab <- pegAmb peg;
      (\x -> (ab, x)) <$> mapM compilePort xs
 
-pegYields :: Peg Desugared -> Compile [Id]
-pegYields (Peg ab ty _) = abYields ab
+pegAmb :: Peg Desugared -> Compile [Id]
+pegAmb (Peg ab ty _) = abAmb ab
 
-abYields :: Ab Desugared -> Compile [Id]
-abYields (Ab _ itfs _) = itfYields itfs
+abAmb :: Ab Desugared -> Compile [Id]
+abAmb (Ab _ itfs _) = itfAmb itfs
 
 -- So we can use this to find out if an interface contains yield.
-itfYields :: ItfMap Desugared -> Compile [Id]
--- itfYields (ItfMap m _) = let res = "Yield" `elem` (M.keys m) in
---         if res then trace "Itf has Yield" $ return res
---                else return res
--- itfYields (ItfMap m _) = trace (show $ M.keys m) $ return ("Yield" `elem` (M.keys m))
-itfYields (ItfMap m _) = return (M.keys m)
+itfAmb :: ItfMap Desugared -> Compile [Id]
+itfAmb (ItfMap m _) = return (M.keys m)
 
 compilePort :: Port Desugared -> Compile ([S.Adap], [String])
 compilePort p@(Port adjs _ _) =
@@ -218,8 +200,8 @@ compileUse (Op op _) = compileOp op
 compileUse (App use xs _) = do amb <- getAmb
                                u <- compileUse use
                                args <- mapM compileTm xs
-                               -- trace (if yields then "App can yield" else "") $
-                                 -- Need to pass in `yield` here.
+                               -- Give the shonky fun the ambient, so it can see
+                               -- if it wants to put a yield in!
                                return (S.SApp u args amb)
 compileUse (Adapted [] t _) = compileUse t
 compileUse (Adapted (r:rr) t a) =
@@ -239,12 +221,6 @@ compileDataCon (DataCon id xs _) = do xs' <- mapM compileTm xs
                                       -- return $ (S.EV id) S.:$ xs'
                                       return $ (S.SApp (S.EV id) xs' amb)
 
--- Compile an SComp to a 0-ary function?
--- We need to do better and clear the ambient, so it doens't think we can insert a yield in here.
--- compileSComp :: SComp Desugared -> Compile S.Exp
--- compileSComp (SComp xs _) = (S.EF <$> pure [([], [])] <*> mapM compileClause xs)
--- TODO: LC: Fix this!
-
 -- We need to clear the ambient before doing the inner terms. This is so that
 -- suspended computations don't think they have access to an effect they don't.
 compileSComp :: SComp Desugared -> Compile S.Exp
@@ -252,7 +228,6 @@ compileSComp (SComp xs _) =
   do writeAmb []
      args <- mapM compileClause xs
      return (S.EF [([], [])] args)
-
 
 compileOp :: Operator Desugared -> Compile S.Exp
 compileOp (VarId id _) = case M.lookup id builtins of

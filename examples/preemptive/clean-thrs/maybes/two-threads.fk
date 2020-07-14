@@ -9,7 +9,7 @@ include threads_lib
 
 -- -- ScheduleT schedules threads, but uses the threads structure for this.
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Console, RefState, Yield]) -> [Console, RefState]Unit}
-scheduleT <yield -> k> cur thrs = -- print "hdled";
+scheduleT <yield -> k> cur thrs =
     -- Find which thread id is the next one to be ran.
     let readthrs = read thrs in
     let next = <Console, RefState> (nextId cur (keys readthrs)) in
@@ -26,7 +26,6 @@ scheduleT <yield -> k> cur thrs = -- print "hdled";
 
 -- If the thread ends, just force a yield.
 scheduleT unit cur thrs = scheduleT yield! cur thrs
-
 
 -- Finds the next highest ID in threads.
 -- If there isn't one higher, i.e. the current is the max, finds the lowest.
@@ -248,13 +247,6 @@ hdled : {[Console, RefState]Unit}
 hdled! =
     let thrs = <Console> makeThreads! in
     run thrs
-
-simpleYield : {<Yield> Unit -> Unit}
-simpleYield <yield -> k> = simpleYield (k unit)
-simpleYield unit = unit
-
--- main : {[Console, RefState] Unit}
--- main! = simpleYield hdled!
 
 main : {[Console, RefState] Unit}
 main! = hdled!
