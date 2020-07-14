@@ -9,7 +9,7 @@ include threads_lib
 
 -- -- ScheduleT schedules threads, but uses the threads structure for this.
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [Console, RefState, Yield]) -> [Console, RefState]Unit}
-scheduleT <yield -> k> cur thrs = print "hdled";
+scheduleT <yield -> k> cur thrs = -- print "hdled";
     -- Find which thread id is the next one to be ran.
     let readthrs = read thrs in
     let next = <Console, RefState> (nextId cur (keys readthrs)) in
@@ -165,6 +165,7 @@ print_yield st = print st; print "\n";
 ----- Handling Promises
 ----------------------------
 
+
 hdl : {Int -> Ref (Threads [Console, Yield, RefState])
     -> <Promise[Console]> Unit
     -> [Yield, Console, RefState] Unit}
@@ -248,9 +249,9 @@ hdled! =
     let thrs = <Console> makeThreads! in
     run thrs
 
--- simpleYield : {<Yield> Unit -> Unit}
--- simpleYield <yield -> k> = simpleYield (k unit)
--- simpleYield unit = unit
+simpleYield : {<Yield> Unit -> Unit}
+simpleYield <yield -> k> = simpleYield (k unit)
+simpleYield unit = unit
 
 -- main : {[Console, RefState] Unit}
 -- main! = simpleYield hdled!

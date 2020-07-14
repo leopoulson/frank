@@ -124,13 +124,17 @@ compute g (ED f)       ls   = consume (VD f) ls                             -- 1
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
 -- 2) Application. Compute function. Save args for later.
-compute g (SApp f as yields)    ls   =
+compute g (SApp f as amb)    ls   =
   do now <- get;
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield.
-     if (now > 400 && yields)
+     if (now > 400 && ("Yield" `elem` amb))
        then do modify (\x -> x - 400)
-               compute g ((SApp (EA "yield") [] False) :! (SApp f as yields)) ls
+
+               -- trace ("\n*** Inserting yield in " ++ show f ++ "$" ++ show as ++ " / " ++ show amb ++ "\n") $
+               --   compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+
+               compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
 
@@ -281,7 +285,7 @@ tryRules f g [] cs ls = if (any isYield cs)
   -- performed, and reinvoke it. This expression doesn't need to be able to
   -- yield, so can just explicitly pass in False.
   then let (gUpdated, expargs) = makeArgs g cs in
-       compute gUpdated (SApp f expargs False) ls
+       compute gUpdated (SApp f expargs []) ls
   -- if not, abort as before.
   else command "abort" [] [] 0 ls
   where
@@ -315,13 +319,13 @@ makeExp n (Call "yield" _ [] ks) g =
   let name = freshName n in
     -- apply `unit` to name.
     -- (g :/ [name := VK ks], EV name :$ [EV "unit" :$ []])
-    (g :/ [name := VK ks], SApp (EV name) [SApp (EV "unit") [] False] False)
+    (g :/ [name := VK ks], SApp (EV name) [SApp (EV "unit") [] []] [])
 -- If it's any other sort of call, bind the name to the call in the env, and
 -- invoke the cont. 0-arily.
 makeExp n call g =
   let name = freshName n in
     -- (g :/ [name := VC call], EV name :$ [])
-    (g :/ [name := VC call], SApp (EV name) [] False)
+    (g :/ [name := VC call], SApp (EV name) [] [])
 
 
 -- given:   env `g`, list of patterns, list of comps
@@ -475,8 +479,8 @@ ioHandler (Call "read" 0 [VR ref] ks, count) =
   do v <- readIORef ref
      ioHandler (flip runState count (consume v (reverse ks)))
 
--- ioHandler (Call "yield" 0 [] ks) =
---      ioHandler (consume (VA "unit" :&& VA "") (reverse ks))
+-- ioHandler (Call "yield" 0 [] ks, count) = trace ("IO Handling Yield") $
+--      ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
     
 -- Here we need to see if
 ioHandler (Call c n vs ks, _) = error $ "Unhandled command: " ++ c ++ "." ++

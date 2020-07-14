@@ -21,7 +21,7 @@ data Exp
   | EA String                               -- atom
   | Exp :& Exp                              -- cons
   -- | Exp :$ [Exp] -- n-ary application
-  | SApp Exp [Exp] CanYield
+  | SApp Exp [Exp] [String]
   | Exp :! Exp                              -- composition (;)
   | Exp :// Exp                             -- composition (o)
   | EF [([Adap], [String])] [([Pat], Exp)]  -- handler
@@ -137,7 +137,7 @@ pLisp p n c = pGap *> (n <$ pP "]" <|> c <$> p <*> pCdr) where
 
 pApp :: Exp -> P Exp
 -- pApp f = (((f :$) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
-pApp f = (((\x -> SApp f x False) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
+pApp f = (((\x -> SApp f x []) <$ pP "(" <*> pCSep pExp ")") >>= pApp)
        <|> (((f :!) <$ pP ";" <* pGap <*> pExp) >>= pApp)
        <|> (((f ://) <$ pP "/" <* pGap <*> pExp) >>= pApp)
        <|> pure f
