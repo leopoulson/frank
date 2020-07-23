@@ -57,7 +57,7 @@ data Sig = go Int | stop Int
 
 data Pid X = pid (Ref (PromiseStatus X))
 
-data PromiseStatus X = empty | done X | addRes {X -> Unit}
+data PromiseStatus X = empty | done X | resume {X -> Unit}
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -152,7 +152,7 @@ to_writeM2 (pid cell) cb =
          | (just susp) ->
              just {case (read cell)
                       { empty -> write cell (done susp!)
-                      | (addRes resumption) -> resumption susp!}} }}
+                      | (resume resumption) -> resumption susp!}} }}
 
 print_yield : {String -> [Console, Yield]Unit}
 print_yield st = print st; print "\n";
@@ -203,8 +203,8 @@ hdl thId thrs <await cell -> thr> =
                  let res = {hdl thId thrs (thr x)} in
                  write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
                  res!
-         -- thr2 has Fork in ambient, but addRes won't allow that.
-         | empty -> writePid cell (addRes thr);
+         -- thr2 has Fork in ambient, but resume won't allow that.
+         | empty -> writePid cell (resume thr);
                  let readthrs = read thrs in
                  let res = {hdl thId thrs unit} in
                  write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));

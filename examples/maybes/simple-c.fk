@@ -41,18 +41,14 @@ nextId cur xs =
 ----------------------------
 -- Promise structures.
 
--- interface Promise  =
---           promise R : Prom R [Promise, Console, RefState, Yield] -> Pid R [Promise, Console, RefState, Yield]
---         | signal : Sig -> Unit
---         | await R : Pid R [Promise, Console, RefState, Yield]-> R
 interface Promise [E] =
-          promise R : Prom R [E | Promise[E|], RefState, Yield] -> Pid R [E | Promise[E|], RefState, Yield]
+          promise R : Prom R [E|] -> Pid R [E | Promise[E|], RefState, Yield]
         | signal : Sig -> Unit
         | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
 
 -- Any effects will be performed in the returned comp.
 -- Any guard conditions should NOT have effects in.
-data Prom R [E] = prom {Sig -> Maybe {[E|]R}}
+data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = printSig String | otherSig
 
@@ -61,7 +57,7 @@ data Sig = printSig String | otherSig
 
 data Pid X = pid (Ref (PromiseStatus X))
 
-data PromiseStatus X = empty | done X | addRes {X -> Unit}
+data PromiseStatus X = waiting | done X | resume {X -> Unit}
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -109,16 +105,66 @@ sleepAndYield x = if (x < 0)
 -- Callback utilities
 
 to_writeM2 : Pid R [E|RefState]
-          -> {S -> (Maybe {[E|RefState] R})}
-          -> {S -> (Maybe {[E|RefState] Unit})}
+          -> {S -> [_|](Maybe {[E|RefState] R})}
+          -> {S -> [_|](Maybe {[E|RefState] Unit})}
 to_writeM2 (pid cell) cb =
     {x -> case (cb x)
          { nothing -> nothing
          | (just susp) ->
              just {case (read cell)
-                      { empty -> write cell (done susp!)
-                      | (addRes resumption) -> resumption susp!}} }}
+                      { waiting -> write cell (done susp!)
+                      | (resume resumption) -> resumption susp!}} }}
 
+twInter : Pid R [E| Promise[E|], RefState, Yield] -- pid
+          -> {S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] R})} -- cb
+          ->  S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] Unit}) -- modified
+twInter (pid cell) cb sig =
+    case (cb sig)
+        {nothing -> nothing
+        | (just susp) ->
+            just {twInter2 (pid cell) susp}}
+            -- just {case (read cell)
+            --          { waiting -> write cell (done susp!)
+            --          | (resume resumption) -> resumption susp!}}}
+
+twInter2 : Pid R [E| Promise[E|], RefState, Yield] -- pid
+        -> {[E| Promise[E|], RefState, Yield] R}   -- susp cb
+        -> [E| Promise[E|], RefState, Yield] Unit -- modified
+twInter2 (pid cell) susp = case (read cell)
+                      { waiting -> write cell (done susp!)
+                      | (resume resumption) -> resumption susp!}
+
+to_writeM3 : Pid R [E| Promise[E|], RefState, Yield] -- pid
+          -> {S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] R})} -- cb
+          -> {S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] Unit})} -- modified
+-- to_writeM3 : Pid R [K| RefState] -- pid
+--           -> {S -> [K| RefState] (Maybe {[K| RefState] R})} -- cb
+--           -> {S -> [K| RefState] (Maybe {[K| RefState] Unit})} -- modified
+to_writeM3 (pid cell) cb = -- {sig -> twInter (pid cell) cb sig}
+    {x -> case ((cb x))
+        { nothing -> nothing
+        | (just susp) ->
+            -- just {twInter2 (pid cell) susp}}}
+            just {case (read cell)
+                     { waiting -> write cell (done susp!)
+                     | (resume resumption) -> resumption susp!}}}}
+
+-- to_writeM3 : Pid R [E| Promise[E|], RefState, Yield] -- pid
+--           -> {S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] R})} -- cb
+--           -> {S -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield] Unit})} -- modified
+-- -- to_writeM3 : Pid R [Promise, RefState, Yield] -- pid
+-- --           -> {S -> (Maybe {[Promise, RefState, Yield] R})} -- cb
+-- --           -> {S -> [RefState, Yield] (Maybe {[Promise, RefState, Yield] Unit})} -- modified
+-- -- to_writeM3 : Pid R [K| RefState] -- pid
+-- --           -> {S -> [K| RefState] (Maybe {[K| RefState] R})} -- cb
+-- --           -> {S -> [K| RefState] (Maybe {[K| RefState] Unit})} -- modified
+-- to_writeM3 (pid cell) cb =
+--     {x -> case ( (cb x))
+--         { nothing -> nothing
+--         | (just susp) -> -- just {unit}}}
+--             just {case (read cell)
+--                      { waiting -> write cell (done susp!)
+--                      | (resume resumption) -> resumption susp!}}}}
 
 print_yield : {String -> [Console, Yield]Unit}
 print_yield st = print st; print "\n";
@@ -130,51 +176,64 @@ print_yield st = print st; print "\n";
 ----------------------------
 ----- Handling Promises
 ----------------------------
+--
 
-hdl : {Int -> Ref (Threads [Console])
-    -> <Promise[Console]> Unit
-    -> [Console, Yield, RefState] Unit}
+toMaybe : Int
+       -> Ref (Threads [E|])
+       -> {Sig -> [E| RefState, Yield] Maybe {[E| Promise [E|], RefState, Yield] Unit}}
+       -> {Sig -> {[E| RefState, Yield]Unit} -> [E|RefState, Yield] Maybe {[E|RefState, Yield]Unit}}
+toMaybe thId thrs cbMod = {sig rest -> case (cbMod sig)
+                                   { nothing -> nothing
+                                   | (just susp) -> just { hdl thId thrs susp!; <Promise> rest!} }}
+                                   -- | (just susp) -> nothing }}
+
+hdl : {Int -> Ref (Threads [E|])
+    -> <Promise[E|]> Unit
+    -> [E|Yield, RefState] Unit}
 
 hdl thId thrs <promise (prom cb) -> k> =
     -- Create new pid cell
-    let cell = pid (new empty) in
+    let cell = pid (new waiting) in
     -- Process callback to convert to general form
-    let cbMod = <Console, RefState, Yield>(to_writeM2 cell cb) in
+    let cbMod = (to_writeM2 cell cb) in
 
     -- Handle callback alongside the rest of the computation.
-    let cbMaybe = {sig rest -> (case ((cbMod sig))
+    -- let cbMaybe = toMaybe thId thrs cbMod in
+    let cbMaybe = {sig rest -> ( (case (cbMod sig)
                                    { nothing -> nothing
-                                   | (just susp) -> just { (hdl thId thrs (susp!; <Promise> rest!)) } })} in
+                                   | (just susp) -> just { hdl thId thrs susp!; <Promise> rest!} }))} in
 
     let readthrs = read thrs in
-    let queued = <Console, RefState, Yield>(addCb thId (cbMaybe) readthrs) in
+    let queued = (addCb thId (cbMaybe) readthrs) in
 
-    -- Write the resumption to the cell and resume.
-    let res = {(hdl thId thrs (k cell))} in
-    write thrs (<Console, Yield, RefState>(writeThk thId res queued));
-    res!
+--     -- Write the resumption to the cell and resume.
+    let res = {hdl thId thrs (k cell)} in
+    write thrs (writeThk thId res queued);
+    res!;
+    unit
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
     let readthrs = read thrs in
-    let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
+    let newThrs = (runThreads sig (readthrs)) in
 
     let res = {hdl thId thrs (thr unit)} in
-    write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
-    res!
+    write thrs ((writeThk thId res newThrs));
+    res!;
+    unit
 
 hdl thId thrs <await cell -> thr> =
     case (readPid cell)
          { (done x) ->
                  let readthrs = read thrs in
                  let res = {hdl thId thrs (thr x)} in
-                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
+                 write thrs ((writeThk thId res readthrs));
                  res!
-         -- thr2 has Fork in ambient, but addRes won't allow that.
-         | empty -> writePid cell (addRes thr);
+         -- thr2 has Fork in ambient, but resume won't allow that.
+         | waiting -> writePid cell (resume thr);
                  let readthrs = read thrs in
                  let res = {hdl thId thrs unit} in
-                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
+                 write thrs ((writeThk thId res readthrs));
                  res!}
 
 hdl thId thrs unit = unit
