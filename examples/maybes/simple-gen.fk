@@ -187,14 +187,13 @@ makeThreads! =
     thrs
 
 
-run : {Ref (Threads [Console]) -> [Console, RefState]Unit}
+run : {Ref (Threads [E|]) -> [E| RefState]Unit}
 run thrs =
-    let readthrs = <Console>(read thrs) in
-    let runner = <RefState, Console>(lookupThk 0 readthrs) in
+    let readthrs = read thrs in
+    let runner = <RefState>(lookupThk 0 readthrs) in
     case runner
         { nothing -> unit
-        | (just runner) -> (scheduleT (runner!) 0 thrs) };
-    unit
+        | (just runner) -> (scheduleT (runner!) 0 thrs) }
 
 hdled : {[Console, RefState]Unit}
 hdled! =
