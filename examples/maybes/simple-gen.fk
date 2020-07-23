@@ -43,8 +43,7 @@ interface Promise [E] =
         | signal : Sig -> Unit
         | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
 
--- Any effects will be performed in the returned comp.
--- Any guard conditions should NOT have effects in.
+-- Effects can be performed in the guard, just NO promises.
 data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = printSig String | otherSig
@@ -64,12 +63,14 @@ writePid (pid cell) x = write cell x
 
 ----------------------------
 -- Threads
+remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
 
-printer : {[Promise[Console], Yield, Console] Unit}
+printer : {[Promise[Console, Web], Yield, Console, Web] Unit}
 printer! = print "Printer starting\n";
            promise (prom { (printSig x) -> just {print "\n*- First "; print x ; print "\n"}
                          | _ -> nothing});
-           promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ; print "\n"}
+           promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ;
+                                                 print "\n10 * 10 = "; print (getRequest "http://api.mathjs.org/v4/?expr=10*10") ;print "\n"}
                          | _ -> nothing});
            promise (prom { (printSig x) -> just {print "\n*- Third "; print x ; print "\n"}
                          | _ -> nothing});
@@ -172,14 +173,14 @@ hdl thId thrs unit = unit
 -------------------------------------
 -- Running
 
-thr1 : {Ref (Threads [Console]) -> {[Console, Yield, RefState] Unit}}
+thr1 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
 thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
 
-thr2 : {Ref (Threads [Console]) -> {[Console, Yield, RefState] Unit}}
+thr2 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
 thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
 
 -- All of these RefState adaptors are necessary, unfortunately.
-makeThreads : {[RefState] Ref (Threads [Console])}
+makeThreads : {[RefState] Ref (Threads [Console, Web])}
 makeThreads! =
     let thrs = new tnil in
     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
@@ -195,11 +196,11 @@ run thrs =
         { nothing -> unit
         | (just runner) -> (scheduleT (runner!) 0 thrs) }
 
-hdled : {[Console, RefState]Unit}
+hdled : {[Console, Web, RefState]Unit}
 hdled! =
-    let thrs = <Console> makeThreads! in
+    let thrs = <Console, Web> makeThreads! in
     run thrs
 
 
-main : {[Console, RefState] Unit}
+main : {[Console, Web, RefState] Unit}
 main! = hdled!
