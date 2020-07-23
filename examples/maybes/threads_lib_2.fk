@@ -49,7 +49,6 @@ runThreads sig (tentry k susp cbs rest) =
     let pUp = (runThread sig (trio susp cbs (tq []))) in
     -- Do the same on the rest of them.
     tentry k (fstT pUp) (thdT pUp) (runThreads sig rest)
-    -- rest
 
 runThread : {Sig -> Trio {[E|] Unit}
                          (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
@@ -59,35 +58,8 @@ runThread : {Sig -> Trio {[E|] Unit}
                   (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})}
 runThread sig (trio susp cbs skipped) =
     case (dequeue cbs)
---     --     -- If we have nothing left to run, just stop and return.
+    --     -- If we have nothing left to run, just stop and return.
         { nothing -> trio susp cbs skipped
         | (just (pair cb cbs)) -> case (cb sig susp)
                                      { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
-                                     | (just susp2) -> runThread sig (trio susp2 cbs skipped)
-                                          }}
-
--- runThreads : {Sig -> Threads [E|] ->  Threads [E|]}
--- runThreads _ (tnil) = tnil
--- runThreads sig (tentry k susp cbs rest) =
---     -- Run the given thread w/ the incoming signal.
---     let pUp = (runThread sig (trio susp cbs (tq []))) in
---     -- Do the same on the rest of them.
---     tentry k (fstT pUp) (thdT pUp) (runThreads sig rest)
-
--- runThread : {Sig -> Trio {[E|] Unit}
---                          (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
---                          (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
---           ->  Trio {[E|] Unit}
---                   (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})
---                   (TQueue {Sig -> {[E|]Unit} -> Maybe {[E|]Unit}})}
--- runThread sig (trio susp cbs skipped) =
---     case (dequeue cbs)
---     --     -- If we have nothing left to run, just stop and return.
---         { nothing -> trio susp cbs skipped
---         | (just (pair cb cbs)) -> case (cb sig susp)
---                                      { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
---                                      -- { nothing -> runThread sig (trio susp cbs (skipped))
---                                      -- { nothing -> (trio susp cbs (skipped))
---                                          -- }}
---                                      | (just susp2) -> runThread sig (trio susp2 cbs skipped)}}
---                                              -- (trio susp cbs skipped)}
+                                     | (just susp2) -> runThread sig (trio susp2 cbs skipped) }}
