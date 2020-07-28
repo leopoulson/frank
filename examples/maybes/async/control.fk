@@ -104,10 +104,12 @@ async proc callCounter =
 caller : {[WebThreads] Unit}
 caller! =
     print "Caller starting\n";
-    let callCounter = new 0 in
-    let p1 = async {print "*- Hey!\n"; "bye!\n"} callCounter in
+    let callCounter = new 50 in
+    let p1 = async {print "*- Hey 1!\n"; "bye 1!"} callCounter in
     -- yield!;
-    let p2 = async {print "*- hey 2!\n"; "bye!\n"} callCounter in
+    let p2 = async {print "*- hey 0!\n"; "bye 0!"} callCounter in
+    yield!;
+    let p2 = async {print "*--------------- hey 0!\n"; "bye 0!"} callCounter in
     print "in the middle\n";
     print (await p1);
     print (await p2);
@@ -151,12 +153,19 @@ mplus x (just y) = just (x + y)
 putIn : X -> Int -> List X -> List X
 putIn _ _ [] = []
 putIn x 0 (_ :: ys) = x :: ys
-putIn x k (y :: ys) = x :: (putIn x (k - 1) ys)
+putIn x k (y :: ys) = y :: (putIn x (k - 1) ys)
 
 findFree : List (Maybe Int) -> Maybe Int
 findFree [] = nothing
 findFree (nothing :: xs) = just 0 --mplus 1 (findFree xs)
 findFree ((just _) :: xs) = mplus 1 (findFree xs)
+
+pMI : Maybe Int -> [Console] Unit
+pMI nothing = print "N "
+pMI (just k) = print "J("; ouint k; print ") "
+
+printList : List (Maybe Int) -> [Console] Unit
+printList l = map pMI l; print "\n"
 
 onAsyncBody : {Ref (List (Maybe Int)) -> {[InProm] String} -> Int -> [WebThreads] Unit}
 onAsyncBody active p callId =
@@ -179,7 +188,9 @@ onAsync _ _ = nothing
 
 onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebThreads] Unit}
 onResultBody active res wid =
+    print "OnResult "; print res; print " "; ouint wid; print "\n";
     let cid = nth wid (read active) in
+    printList (read active);
     case cid
         { nothing -> print "Got result back from incorrect worker\n"
         | (just k) -> write active (putIn nothing wid (read active));
