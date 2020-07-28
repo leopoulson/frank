@@ -119,7 +119,7 @@ caller! =
     print "Caller starting\n";
     let callCounter = new 0 in
     let p1 = async {print "*- Hey!\n"; "bye!"} callCounter in
-    print "Wowzer - in the middle!\n";
+    print "in the middle!\n";
     print (await p1)
 
 

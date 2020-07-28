@@ -11,13 +11,13 @@ interface Yield = yield : Unit
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [E|]) -> [E| RefState]Unit}
 scheduleT <yield -> k> cur thrs =
     -- Find which thread id is the next one to be ran.
-    let readthrs = read thrs in
-    let next = <RefState> (nextId cur (keys readthrs)) in
+    -- let readthrs = read thrs in
+    let next = (nextId cur (keys (read thrs))) in
 
     -- Look up this new thunk.
-    let newThk = <RefState>(fromMaybe (lookupThk next (readthrs))) in
+    let newThk = (fromMaybe (lookupThk next (read thrs))) in
     -- Thunk current continuation; write this in threads
-    let newThrs = <RefState>(writeThk cur {k unit} readthrs) in
+    let newThrs = (writeThk cur {k unit} (read thrs)) in
     write thrs newThrs;
 
     -- Restart with new continuation
@@ -38,169 +38,160 @@ nextId cur xs =
 ----------------------------
 -- Promise structures.
 
-interface Promise [E] =
-          promise R : Prom R [E|] -> Pid R [E | Promise[E|], RefState, Yield]
-        | signal : Sig -> Unit
-        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
+-- interface Promise [E] =
+--           promise R : Prom R [E|] -> Pid R [E | Promise[E|], RefState, Yield]
+--         | signal : Sig -> Unit
+--         | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
 
--- Effects can be performed in the guard, just NO promises.
-data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
+-- -- Effects can be performed in the guard, just NO promises.
+-- data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = printSig String | otherSig
 
-----------------------------
--- Pids
+-- ----------------------------
+-- -- Pids
 
-data Pid X = pid (Ref (PromiseStatus X))
+-- data Pid X = pid (Ref (PromiseStatus X))
 
-data PromiseStatus X = waiting | done X | resume {X -> Unit}
+-- data PromiseStatus X = waiting | done X | resume {X -> Unit}
 
-readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
-readPid (pid cell) = read cell
+-- readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+-- readPid (pid cell) = read cell
 
-writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
-writePid (pid cell) x = write cell x
+-- writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+-- writePid (pid cell) x = write cell x
 
-----------------------------
--- Threads
-remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
+-- ----------------------------
+-- -- Threads
+-- remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
 
-printer : {[Promise[Console, Web], Yield, Console, Web] Unit}
-printer! = print "Printer starting\n";
-           promise (prom { (printSig x) -> just {print "\n*- First "; print x ; print "\n"}
-                         | _ -> nothing});
-           promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ;
-                                                 print "\n10 * 10 = "; print (getRequest "http://api.mathjs.org/v4/?expr=10*10") ;print "\n"}
-                         | _ -> nothing});
-           promise (prom { (printSig x) -> just {print "\n*- Third "; print x ; print "\n"}
-                         | _ -> nothing});
-           unit
+-- printer : {[Promise[Console, Web], Yield, Console, Web] Unit}
+-- printer! = print "Printer starting\n";
+--            promise (prom { (printSig x) -> just {print "\n*- First "; print x ; print "\n"}
+--                          | _ -> nothing});
+--            promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ;
+--                                                  print "\n10 * 10 = "; print (getRequest "http://api.mathjs.org/v4/?expr=10*10") ;print "\n"}
+--                          | _ -> nothing});
+--            promise (prom { (printSig x) -> just {print "\n*- Third "; print x ; print "\n"}
+--                          | _ -> nothing});
+--            unit
 
 
-sender : {[Promise[Console], Yield, Console]Unit}
-sender! = print "Sender starting\n";
-          -- signal otherSig;
-          signal (printSig "One");
-          signal (printSig "Two");
-          signal (printSig "Three");
-          unit
+-- sender : {[Promise[Console], Yield, Console]Unit}
+-- sender! = print "Sender starting\n";
+--           -- signal otherSig;
+--           signal (printSig "One");
+--           signal (printSig "Two");
+--           signal (printSig "Three");
+--           unit
 
-catter : {[Console, Yield] Unit}
-catter! = print "Beppy\n";
-          sleep 200000;
-          yield!;
-          catter!
+-- catter : {[Console, Yield] Unit}
+-- catter! = print "Beppy\n";
+--           sleep 200000;
+--           yield!;
+--           catter!
          
 
--- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
-sleepAndYield : Int -> [Console, Yield]Unit
-sleepAndYield x = if (x < 0)
-              { unit }
-              { sleep 100000; yield!; sleepAndYield (x - 100000) }
+-- -- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
+-- sleepAndYield : Int -> [Console, Yield]Unit
+-- sleepAndYield x = if (x < 0)
+--               { unit }
+--               { sleep 100000; yield!; sleepAndYield (x - 100000) }
 
 
-----------------------------
--- Callback utilities
+-- ----------------------------
+-- -- Callback utilities
 
-to_writeM2 : Pid R [E|RefState]
-          -> {S -> [K|] (Maybe {[E|RefState] R})}
-          -> {S -> [K|] (Maybe {[E|RefState] Unit})}
-to_writeM2 (pid cell) cb =
-    {x -> case (cb x)
-         { nothing -> nothing
-         | (just susp) ->
-             just {case (read cell)
-                      { waiting -> write cell (done susp!)
-                      | (resume resumption) -> resumption susp! }}}}
+-- to_writeM2 : Pid R [E|RefState]
+--           -> {S -> [K|] (Maybe {[E|RefState] R})}
+--           -> {S -> [K|] (Maybe {[E|RefState] Unit})}
+-- to_writeM2 (pid cell) cb =
+--     {x -> case (cb x)
+--          { nothing -> nothing
+--          | (just susp) ->
+--              just {case (read cell)
+--                       { waiting -> write cell (done susp!)
+--                       | (resume resumption) -> resumption susp! }}}}
 
-print_yield : {String -> [Console, Yield]Unit}
-print_yield st = print st; print "\n";
-                 sleep 250000;
-                 yield!;
-                 print_yield st
+-- print_yield : {String -> [Console, Yield]Unit}
+-- print_yield st = print st; print "\n";
+--                  sleep 250000;
+--                  yield!;
+--                  print_yield st
 
-----------------------------
------ Handling Promises
-----------------------------
+-- ----------------------------
+-- ----- Handling Promises
+-- ----------------------------
 
-hdl : {Int -> Ref (Threads [E|])
-    -> <Promise[E|]> Unit
-    -> [E| RefState, Yield] Unit}
+-- hdl : {Int -> Ref (Threads [E|])
+--     -> <Promise[E|]> Unit
+--     -> [E| RefState, Yield] Unit}
 
-hdl thId thrs <promise (prom cb) -> k> =
-    -- Create new pid cell
-    let cell = pid (new waiting) in
-    -- Process callback to convert to general form
-    let cbMod = (to_writeM2 cell cb) in
+-- hdl thId thrs <promise (prom cb) -> k> =
+--     -- Create new pid cell
+--     let cell = pid (new waiting) in
+--     -- Process callback to convert to general form
+--     let cbMod = (to_writeM2 cell cb) in
 
-    -- Handle callback alongside the rest of the computation.
-    let cbMaybe = {sig rest -> ( (case (cbMod sig)
-                                   { nothing -> nothing
-                                   | (just susp) -> just { hdl thId thrs susp!; <Promise> rest!} }))} in
+--     -- Handle callback alongside the rest of the computation.
+--     let cbMaybe = {sig rest -> case (cbMod sig)
+--                                  { nothing -> nothing
+--                                  | (just susp) -> just { hdl thId thrs susp!; rest!} }} in
+--     let queued = (addCb thId cbMaybe (read thrs)) in
 
-    let readthrs = read thrs in
-    let queued = (addCb thId (cbMaybe) readthrs) in
+--     -- Write the resumption to the cell and resume.
+--     write thrs queued;
+--     hdl thId thrs (k cell)
 
-    -- Write the resumption to the cell and resume.
-    let res = {hdl thId thrs (k cell)} in
-    write thrs (writeThk thId res queued);
-    res!
+-- -- So in this case, we want to go to each _thread_ and run the installed callbacks.
+-- hdl thId thrs <signal sig -> thr> =
+--     let newThrs = (runThreads sig (read thrs)) in
 
--- So in this case, we want to go to each _thread_ and run the installed callbacks.
-hdl thId thrs <signal sig -> thr> =
-    let readthrs = read thrs in
-    let newThrs = (runThreads sig (readthrs)) in
+--     write thrs newThrs;
+--     hdl thId thrs (thr unit)
 
-    let res = {hdl thId thrs (thr unit)} in
-    write thrs ((writeThk thId res newThrs));
-    res!
+-- hdl thId thrs <await cell -> thr> =
+--     case (readPid cell)
+--         { (done x) ->
+--             hdl thId thrs (thr x)
+--         | waiting ->
+--             writePid cell (resume thr);
+--             hdl thId thrs unit
+--         }
 
-hdl thId thrs <await cell -> thr> =
-    let res = new {unit} in
-    let readthrs = read thrs in
-    case (readPid cell)
-        { (done x) ->
-            write res {hdl thId thrs (thr x)}
-        | waiting ->
-            writePid cell (resume thr);
-            write res {hdl thId thrs unit}
-        };
-    write thrs (writeThk thId (read res) readthrs);
-    (read res)!
+-- hdl thId thrs unit = unit
 
-hdl thId thrs unit = unit
+-- -------------------------------------
+-- -- Running
 
--------------------------------------
--- Running
+-- thr1 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
+-- thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
 
-thr1 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
-thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
+-- thr2 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
+-- thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
 
-thr2 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
-thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
-
--- All of these RefState adaptors are necessary, unfortunately.
-makeThreads : {[RefState] Ref (Threads [Console, Web])}
-makeThreads! =
-    let thrs = new tnil in
-    write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
-               (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil));
-    thrs
+-- -- All of these RefState adaptors are necessary, unfortunately.
+-- makeThreads : {[RefState] Ref (Threads [Console, Web])}
+-- makeThreads! =
+--     let thrs = new tnil in
+--     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
+--                (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil));
+--     thrs
 
 
-run : {Ref (Threads [E|]) -> [E| RefState]Unit}
-run thrs =
-    let readthrs = read thrs in
-    let runner = <RefState>(lookupThk 0 readthrs) in
-    case runner
-        { nothing -> unit
-        | (just runner) -> (scheduleT (runner!) 0 thrs) }
+-- run : {Ref (Threads [E|]) -> [E| RefState]Unit}
+-- run thrs =
+--     let readthrs = read thrs in
+--     let runner = <RefState>(lookupThk 0 readthrs) in
+--     case runner
+--         { nothing -> unit
+--         | (just runner) -> (scheduleT (runner!) 0 thrs) }
 
-hdled : {[Console, Web, RefState]Unit}
-hdled! =
-    let thrs = <Console, Web> makeThreads! in
-    run thrs
+-- hdled : {[Console, Web, RefState]Unit}
+-- hdled! =
+--     let thrs = <Console, Web> makeThreads! in
+--     run thrs
 
 
-main : {[Console, Web, RefState] Unit}
-main! = hdled!
+-- main : {[Console, Web, RefState] Unit}
+-- main! = hdled!

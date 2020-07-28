@@ -14,7 +14,7 @@ data Threads [E] = tentry Int {[E| RefState, Yield] Unit}
                           (TQueue {Sig -> {[E| RefState, Yield] Unit} -> [E|RefState, Yield] Maybe {[E| RefState, Yield] Unit}}) (Threads [E|])
                  | tnil
 
-keys : {Threads [E|] -> List Int}
+keys : {Threads [E|] -> [E| RefState]List Int}
 keys tnil = []
 keys (tentry k _ _ rest) = k :: keys rest
 
@@ -35,7 +35,7 @@ writeThk k newThk (tentry k' thk q rest) =
 
 
 
-lookupThk : {Int -> Threads [E|] -> Maybe {[E| RefState, Yield] Unit}}
+lookupThk : {Int -> Threads [E|] -> [E| RefState] Maybe {[E| RefState, Yield] Unit}}
 lookupThk k tnil = nothing
 lookupThk k (tentry k' thk _ rest) =
     if (k == k')
