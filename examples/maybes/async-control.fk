@@ -46,7 +46,7 @@ interface Promise [E] =
 -- Effects can be performed in the guard, just NO promises.
 data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
-data Sig = call {[Console, Web] String} Int | result String Int
+data Sig = call {[InProm] String} Int | result String Int | cancel Int
 -- data Sig = result String Int
 
 ----------------------------
@@ -65,9 +65,17 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
+interface LocalCancel = localCancel : Unit
+
+hdlCancel : {<LocalCancel> Unit ->  Unit}
+hdlCancel <localCancel -> k> = unit
+hdlCancel x = x
 
 -- Alias for all of the requisite threads.
-interface WebThreads = [Promise[Web, Console], Console, Web, RefState, Yield]
+interface InPromPre = [Web, Console]
+interface InProm = [InPromPre, LocalCancel]
+interface WTNP = [InPromPre, RefState, Yield, LocalCancel]
+interface WebThreads = [Promise[InProm], WTNP]
 
 -- This is the remote web request
 remoteRequest : {String -> [Web]String}
@@ -80,7 +88,7 @@ resultWaiter callNo = promise (prom { (result res callNo') -> if (callNo == call
 
 -- Caller takes a process and a callID
 -- it sends a signal to run the process, then installs a promise to wait the result.
-async : {[Console, Web] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
+async : {[InProm] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
 async proc callCounter =
     let callNo = read callCounter in
     -- Install the result waiter before we call.
@@ -92,19 +100,35 @@ async proc callCounter =
     -- and return the waiter.
     waiter
 
-onRun : {{[Console, Web] String} -> Int -> [WebThreads] Unit}
-onRun proc callId =
+canceller : {Int -> Sig -> [WTNP] Maybe {[Promise[Web, Console, LocalCancel], LocalCancel, Console, RefState, Web, Yield] Unit}}
+canceller callId (cancel callId') =
+    if (callId == callId')
+        { just {localCancel!} }
+        { nothing }
+canceller _ _ = nothing
+
+-- Need to implement cancelling.
+runProc : {{[InProm] String} -> Int -> [WebThreads] Unit}
+runProc proc callId =
+
+    (promise (prom {s -> canceller callId s}));
+
     -- First, run the process
     let res = <Promise, RefState, Yield>(proc)! in
     -- Then we want to send a result message w/ the same callId
-    signal (result res callId);
+    signal (result res callId)
+
+onRun : {{[InProm] String} -> Int -> [WebThreads] Unit}
+onRun proc callId =
+    -- (runProc proc callId);
+    <LocalCancel> (hdlCancel (runProc proc callId));
     -- Then finally we reinstall the runner.
-     runner!;
+    runner!;
     -- and return unit.
     unit
 
-runProm : {Sig -> [Console, RefState, Web, Yield] Maybe {[WebThreads] Unit}}
-runProm (call proc callId) = just { onRun proc callId }
+runProm : {Sig -> [WTNP] Maybe {[WebThreads] Unit}}
+runProm (call proc callId) = just {  (onRun proc callId) }
 runProm _ = nothing
 
 -- Runner needs to wait for call messages to come in. When they do, it should
@@ -119,15 +143,15 @@ caller : {[WebThreads] Unit}
 caller! =
     print "Caller starting\n";
     let callCounter = new 0 in
-    let p1 = async {print "*- Hey!\n"; "bye!"} callCounter in
+    let p1 = async {print "*- Hey!\n"; "bye!\n"} callCounter in
+    yield!;
+    let p2 = async {print "*- Hey 2!\n"; "bye!\n"} callCounter in
     print "in the middle!\n";
     print (await p1)
 
 
-
-
--- ----------------------------
--- -- Callback utilities
+----------------------------
+-- Callback utilities
 
 to_writeM2 : Pid R [E|RefState]
           -> {S -> [K|] (Maybe {[E|RefState] R})}
@@ -191,14 +215,14 @@ hdl thId thrs unit = unit
 -------------------------------------
 -- Running
 
-thr1 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
-thr1 thrs = {hdl 0 thrs runnerTop! }
+thr1 : {Ref (Threads [InProm]) -> {[WTNP] Unit}}
+thr1 thrs = {hdl 0 thrs runnerTop!}
 
-thr2 : {Ref (Threads [Console, Web]) -> {[Console, Web, Yield, RefState] Unit}}
-thr2 thrs = {hdl 1 thrs caller! }
+thr2 : {Ref (Threads [InProm]) -> {[WTNP] Unit}}
+thr2 thrs = {hdl 1 thrs caller!}
 
 -- All of these RefState adaptors are necessary, unfortunately.
-makeThreads : {[RefState] Ref (Threads [Console, Web])}
+makeThreads : {[RefState] Ref (Threads [InProm])}
 makeThreads! =
     let thrs = new tnil in
     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
@@ -207,7 +231,7 @@ makeThreads! =
 
 
 run : {Ref (Threads [E|]) -> [E| RefState]Unit}
--- run : {Ref (Threads [E|]) -> [E| ]Unit}
+-- -- run : {Ref (Threads [E|]) -> [E| ]Unit}
 run thrs =
     let readthrs = read thrs in
     let runner = (lookupThk 0 readthrs) in
@@ -215,11 +239,14 @@ run thrs =
         { nothing -> unit
         | (just runner) -> (scheduleT (runner!) 0 thrs) }
 
-hdled : {[Console, Web, RefState]Unit}
+hdled : {[Console, Web, LocalCancel, RefState]Unit}
 hdled! =
-    let thrs = <Console, Web> makeThreads! in
+    let thrs = <Console, Web, LocalCancel> makeThreads! in
     run thrs
 
+cancelThru : <LocalCancel> Unit -> Unit
+cancelThru <localCancel -> k> = cancelThru (k unit)
+cancelThru x = x
 
 main : {[Console, Web, RefState] Unit}
-main! = hdled!
+main! = cancelThru hdled!
