@@ -1,3 +1,8 @@
+---- This is broken; we can't handle the cancel effect locally, it pops up to the top-level.
+-- So we try and move it to having individual threads that run.
+
+
+
 include std
 
 include threads_lib_2
@@ -67,8 +72,8 @@ writePid (pid cell) x = write cell x
 
 interface LocalCancel = localCancel : Unit
 
-hdlCancel : {<LocalCancel> Unit ->  Unit}
-hdlCancel <localCancel -> k> = unit
+hdlCancel : {<LocalCancel> Unit -> [Console] Unit}
+hdlCancel <localCancel -> k> = print "*--- Cancelling\n"; unit
 hdlCancel x = x
 
 -- Alias for all of the requisite threads.
@@ -103,7 +108,7 @@ async proc callCounter =
 canceller : {Int -> Sig -> [WTNP] Maybe {[Promise[Web, Console, LocalCancel], LocalCancel, Console, RefState, Web, Yield] Unit}}
 canceller callId (cancel callId') =
     if (callId == callId')
-        { just {localCancel!} }
+        { just {print "Eek!"; localCancel!} }
         { nothing }
 canceller _ _ = nothing
 
@@ -111,10 +116,11 @@ canceller _ _ = nothing
 runProc : {{[InProm] String} -> Int -> [WebThreads] Unit}
 runProc proc callId =
 
-    (promise (prom {s -> canceller callId s}));
-
+    promise (prom {s -> canceller callId s});
+    print "installed cancelller at "; ouint callId; print "\n";
+    yield!;
     -- First, run the process
-    let res = <Promise, RefState, Yield>(proc)! in
+    let res = <Promise, RefState, Yield> proc! in
     -- Then we want to send a result message w/ the same callId
     signal (result res callId)
 
@@ -144,6 +150,9 @@ caller! =
     print "Caller starting\n";
     let callCounter = new 0 in
     let p1 = async {print "*- Hey!\n"; "bye!\n"} callCounter in
+    yield!;
+    print "Caller cancelling\n";
+    signal (cancel 0);
     yield!;
     let p2 = async {print "*- Hey 2!\n"; "bye!\n"} callCounter in
     print "in the middle!\n";
@@ -231,7 +240,6 @@ makeThreads! =
 
 
 run : {Ref (Threads [E|]) -> [E| RefState]Unit}
--- -- run : {Ref (Threads [E|]) -> [E| ]Unit}
 run thrs =
     let readthrs = read thrs in
     let runner = (lookupThk 0 readthrs) in
@@ -244,8 +252,8 @@ hdled! =
     let thrs = <Console, Web, LocalCancel> makeThreads! in
     run thrs
 
-cancelThru : <LocalCancel> Unit -> Unit
-cancelThru <localCancel -> k> = cancelThru (k unit)
+cancelThru : <LocalCancel> Unit -> [Console] Unit
+cancelThru <localCancel -> k> = print "Cancelling thru\n"; unit ;   cancelThru (k unit)
 cancelThru x = x
 
 main : {[Console, Web, RefState] Unit}
