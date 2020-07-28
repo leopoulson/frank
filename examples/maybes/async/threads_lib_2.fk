@@ -63,3 +63,26 @@ runThread sig (trio susp cbs skipped) =
         | (just (pair cb cbs)) -> case (cb sig susp)
                                      { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
                                      | (just susp2) -> runThread sig (trio susp2 cbs skipped) }}
+
+runThreadsShallow : {Sig -> Threads [E|] -> [E|RefState, Yield] Threads [E|]}
+runThreadsShallow _ (tnil) = tnil
+runThreadsShallow sig (tentry k susp cbs rest) =
+    -- Run the given thread w/ the incoming signal.
+    let pUp = (runThreadShallow sig (trio susp cbs (tq []))) in
+    -- Do the same on the rest of them.
+    tentry k (fstT pUp) (thdT pUp) (runThreadsShallow sig rest)
+
+runThreadShallow : {Sig -> Trio {[E|] Unit}
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+          -> [E|] Trio {[E|] Unit}
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})}
+runThreadShallow sig (trio susp cbs skipped) =
+    case (dequeue cbs)
+    --     -- If we have nothing left to run, just stop and return.
+        { nothing -> trio susp cbs skipped
+        | (just (pair cb cbs)) -> case (cb sig susp)
+                                     { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
+                                     -- In shallow case, we only run one successful one.
+                                     | (just susp2) -> (trio susp2 cbs skipped) }}
