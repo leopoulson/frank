@@ -50,6 +50,11 @@ data Sig = call {[InProm] String} Int | result String Int | cancel Int
          -- For workers
          | workIn {[InProm] String} Int | workOut String Int
 
+printSig : Sig -> [Console] Unit
+printSig (call _ x) = print "Call "; ouint x
+printSig (result st x) = print "Result "; print st; print " "; ouint x 
+printSig _ = unit
+
 ----------------------------
 -- Pids
 
@@ -85,6 +90,7 @@ resultWaiter callNo = promise (prom { (result res callNo') -> if (callNo == call
 -- it sends a signal to run the process, then installs a promise to wait the result.
 async : {[InProm] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
 async proc callCounter =
+    print "Asyncing!\n";
     let callNo = read callCounter in
     -- Install the result waiter before we call.
     let waiter = (resultWaiter callNo) in
@@ -103,7 +109,9 @@ caller! =
     -- yield!;
     let p2 = async {print "*- hey 2!\n"; "bye!\n"} callCounter in
     print "in the middle\n";
-    print (await p1)
+    print (await p1);
+    print (await p2);
+    print "Finished!"
 
 
 ------------
@@ -152,6 +160,7 @@ findFree ((just _) :: xs) = mplus 1 (findFree xs)
 
 onAsyncBody : {Ref (List (Maybe Int)) -> {[InProm] String} -> Int -> [WebThreads] Unit}
 onAsyncBody active p callId =
+    print "on Async running\n";
     let newWorker = findFree (read active) in
     case (newWorker)
         { nothing -> print "Sorry, we're full!\n"
@@ -244,6 +253,7 @@ hdl thId thrs <promise (prom cb) -> k> =
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
+
     let newThrs = (runThreadsShallow sig (read thrs)) in
 
     write thrs newThrs;

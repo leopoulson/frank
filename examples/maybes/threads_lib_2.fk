@@ -10,6 +10,12 @@ dequeue : {TQueue X -> Maybe (Pair X (TQueue X))}
 dequeue (tq []) = nothing
 dequeue (tq (x :: xs)) = just (pair x (tq xs))
 
+qjoin : {TQueue X -> TQueue X -> TQueue X}
+qjoin todo skipped =
+   case (dequeue todo)
+       { nothing -> skipped
+       | (just (pair x xs)) -> qjoin xs (enqueue x skipped)}
+
 data Threads [E] = tentry Int {[E| RefState, Yield] Unit}
                           (TQueue {Sig -> {[E| RefState, Yield] Unit} -> [E|RefState, Yield] Maybe {[E| RefState, Yield] Unit}}) (Threads [E|])
                  | tnil
@@ -58,19 +64,22 @@ runThread : {Sig -> Trio {[E|] Unit}
                   (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})}
 runThread sig (trio susp cbs skipped) =
     case (dequeue cbs)
-    --     -- If we have nothing left to run, just stop and return.
+        -- If we have nothing left to run, just stop and return.
         { nothing -> trio susp cbs skipped
         | (just (pair cb cbs)) -> case (cb sig susp)
                                      { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
                                      | (just susp2) -> runThread sig (trio susp2 cbs skipped) }}
 
+
+---- Shallow handling;
+-- I.e, only execute ONE promise on each thread.
 runThreadsShallow : {Sig -> Threads [E|] -> [E|RefState, Yield] Threads [E|]}
 runThreadsShallow _ (tnil) = tnil
 runThreadsShallow sig (tentry k susp cbs rest) =
     -- Run the given thread w/ the incoming signal.
     let pUp = (runThreadShallow sig (trio susp cbs (tq []))) in
     -- Do the same on the rest of them.
-    tentry k (fstT pUp) (thdT pUp) (runThreadsShallow sig rest)
+    tentry k (fstT pUp) (qjoin (sndT pUp) (thdT pUp)) (runThreadsShallow sig rest)
 
 runThreadShallow : {Sig -> Trio {[E|] Unit}
                          (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
@@ -83,6 +92,6 @@ runThreadShallow sig (trio susp cbs skipped) =
     --     -- If we have nothing left to run, just stop and return.
         { nothing -> trio susp cbs skipped
         | (just (pair cb cbs)) -> case (cb sig susp)
-                                     { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
+                                     { nothing -> runThreadShallow sig (trio susp cbs (enqueue cb skipped))
                                      -- In shallow case, we only run one successful one.
                                      | (just susp2) -> (trio susp2 cbs skipped) }}
