@@ -253,7 +253,7 @@ hdled! =
     run thrs
 
 cancelThru : <LocalCancel> Unit -> [Console] Unit
-cancelThru <localCancel -> k> = print "Cancelling thru\n"; unit ;   cancelThru (k unit)
+cancelThru <localCancel -> k> = print "Cancelling thru\n"; unit -- ;   cancelThru (k unit)
 cancelThru x = x
 
 main : {[Console, Web, RefState] Unit}
