@@ -27,35 +27,6 @@ scheduleT <yield -> k> cur thrs =
 -- If the thread ends, just force a yield.
 scheduleT unit cur thrs = scheduleT yield! cur thrs
 
-scheduleL : {<Yield, LCancel> Unit -> Int -> Ref (Threads [E| LCancel, Console]) -> [E| Console, RefState]Unit}
-scheduleL <yield -> k> cur thrs =
-    -- Find which thread id is the next one to be ran.
-    let readthrs = read thrs in
-    -- let ks = (keys (read thrs)) in
-    let next =  (nextId cur (keysL (read thrs))) in
-
-    -- Look up this new thunk.
-    let newThk = (fromMaybe (lookupThkL next (read thrs))) in
-    -- Thunk current continuation; write this in threads
-    let newThrs = (writeThk cur {k unit} (read thrs)) in
-    write thrs newThrs;
-
-    -- -- Restart with new continuation
-    -- print "\n Changing to "; ouint next; print "\n";
-    scheduleL newThk! next thrs
-    -- unit
-
-scheduleL <lCancel -> k> cur thrs =
-    print "\n* Cancelling on "; ouint cur; print "\n";
-    -- Write empty to the threads.
-    let newThrs = writeThk cur {unit} (read thrs) in
-    write thrs newThrs;
-    scheduleL yield! cur thrs
-
-
--- If the thread ends, just force a yield.
-scheduleL unit cur thrs = scheduleL yield! cur thrs
-
 -- Finds the next highest ID in threads.
 -- If there isn't one higher, i.e. the current is the max, finds the lowest.
 nextId : {Int -> List Int -> Int}
@@ -74,7 +45,6 @@ interface Promise [E] =
         | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
 
 -- Effects can be performed in the guard, just NO promises.
--- data Prom R [E] = prom {Sig -> [E| RefState, Yield] (Maybe {[E| Promise[E|], RefState, Yield]R})}
 data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = call {[InProm] String} Int | result String Int | cancel Int
@@ -124,11 +94,8 @@ canceller _ _ = nothing
 workBody : {{[InProm] String} -> Int -> [WebThreads] Unit}
 workBody p wid =
     promise (prom {s -> canceller wid s});
-    -- lCancel!;
     print "Canceller installed on "; ouint wid; print "\n";
-    -- signal (cancel 0);
     yield!;
-    -- signal (cancel 0);
     -- Perform the comp
     let res = <Promise, RefState, Yield> p! in
     -- Send the result
@@ -144,11 +111,11 @@ workProm wid (workIn p wid') =
         { nothing }
 workProm _ _ = nothing
 
--- -- -- What does the worker do?
--- -- -- * It waits for a signal to execute
--- -- -- * Runs the supplied process
--- -- -- * Sends the result
--- -- -- * Reinstalls itself.
+-- What does the worker do?
+-- * It waits for a signal to execute
+-- * Runs the supplied process
+-- * Sends the result
+-- * Reinstalls itself.
 worker : {Int -> [WebThreads] Pid Unit [WebThreads]}
 worker wid = print "Worker installed\n"; promise (prom {s -> workProm wid s})
 
@@ -190,7 +157,6 @@ onAsync _ _ = nothing
 onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebThreads] Unit}
 onResultBody active res wid =
     let cid = nth wid (read active) in
-    -- printList (read active);
     case cid
         { nothing -> print "Got result back from incorrect worker\n"
         | (just k) -> write active (putIn nothing wid (read active));
@@ -202,6 +168,9 @@ onResult : {Ref (List (Maybe Int)) -> Sig ->  Maybe {[WebThreads] Unit}}
 onResult active (workOut res wid) =
     just { onResultBody active res wid }
 onResult _ _ = nothing
+
+-- onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+
 
 -- Controller will take procs and issue them on to workers.
 -- Keeps a list of which workers are busy.
@@ -257,8 +226,8 @@ caller! =
     signal (cancel 0);
     print "in the middle\n";
     -- print (await p1);
-    -- let p2 = async {print "*- Hey !\n"; "bye !\n"} callCounter in
-    -- yield!;
+    let p2 = async {print "*- Hey !\n"; "bye !\n"} callCounter in
+    yield!;
     -- print (await p2);
     print "Finished!\n"
 
@@ -289,7 +258,7 @@ lookCancel <lCancel -> k> = print "Seen it!"; lCancel!; <LCancel(s a -> s a a)> 
 lookCancel unit = unit
 
 stopCancel : {<LCancel> Unit -> [Console] Unit}
-stopCancel <lCancel -> k> = print "***** Stopping cancel"
+stopCancel <lCancel -> k> = print "***** Stopping cancel\n"
 stopCancel unit = unit
 
 -- cbPerhaps : {Sig -> {Sig -> [Console, Web, LCancel, RefState, Yield] (Maybe {[Promise[Console, Web, LCancel], Console, Web, LCancel, RefState, Yield]Unit})}
@@ -323,29 +292,7 @@ hdl thId thrs <promise (prom cb) -> k> =
     -- Process callback to convert to general form
     let cbMod = <Console, RefState, Web, Yield, LCancel> (to_writeM2 cell cb) in
 
-
     let cbM = {sig rest -> (cbPerhaps thId sig thrs cbMod rest)} in
-    -- Handle callback alongside the rest of the computation.
-    -- let cbMaybe =
-    --  {sig rest ->
-    --     case (cbMod sig)
-    --      { nothing -> nothing
-    --      | (just susp) -> -- nothing }} in
-    --          -- just { threadCancel (<LCancel> (hdl thId thrs susp!; rest!))} }} in
-    --          -- just { let res = {<LCancel> (threadCancel susp!)} in
-    --          ------ PLAIN RUNNING
-    --          just { let res = {  print "Pre susp\n"; (( susp!)); print "Post susp\n"} in
-    --                  ((hdl thId thrs res!; rest!))} }} in
-
-             ------ ???
-             -- just { let res = {  print "Pre susp\n";
-             --                      (stopCancel (susp!));
-             --                    print "Post susp\n"} in
-             --         ((hdl thId thrs res!; rest!))} }} in
-            
-             -- just { let res = { threadCancel (<LCancel>( susp!))} in
-             --         let h = {(( hdl thId thrs res!; rest!))} in
-             --         print "Executing Prom!\n"; threadCancel (<LCancel> h!)} }} in
 
     let readthrs = read thrs in
     let queued = <Console, RefState, Web, Yield, LCancel>(addCb thId cbM (readthrs)) in
@@ -356,10 +303,8 @@ hdl thId thrs <promise (prom cb) -> k> =
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
-    -- print "\nSignal in; "; <LCancel, RefState, Web, Yield> (printSig sig); print "\n";
     let readthrs = read thrs in
     let newThrs = <Console, RefState, Web, Yield, LCancel>(runThreadsShallow sig (readthrs)) in
-    -- let newThrs = (runThreads sig (read thrs)) in
 
     write thrs newThrs;
     hdl thId thrs (thr unit)
@@ -385,14 +330,6 @@ sayCancel : {<LCancel> Unit -> [Console] Unit}
 sayCancel <lCancel -> _> = print "top level cancel"; unit
 sayCancel unit = unit
 
--- threadCancel : {<LCancel> Unit -> [LCancel, Console] Unit}
--- threadCancel <lCancel -> _> = print "**** thr cancelling\n"; unit
--- threadCancel unit = unit
-
--- threadCancel : {<LCancel> Unit -> [Console] Unit}
--- threadCancel <lCancel -> _> = print "**** thr cancelling\n"; unit
--- threadCancel unit = unit
-
 fromList : {List {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
            -> Ref (Threads [Console, Web]) -> Int -> Threads [Console, Web]}
 fromList [] _ _ = tnil
@@ -401,26 +338,26 @@ fromList (f :: fs) thrs k = tentry k (<RefState> (f thrs)) (tq []) (fromList fs 
 w0 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
 w0 thrs = {((sayCancel(hdl 0 thrs (worker 0; unit))))}
 
--- w1 : {Ref (Threads [InProm]) -> {[WTNP] Unit}}
--- w1 thrs = {hdl 1 thrs (worker 1; unit)}
+w1 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+w1 thrs = {((sayCancel(hdl 1 thrs (worker 1; unit))))}
 
 -- w2 : {Ref (Threads [InProm]) -> {[WTNP] Unit}}
 -- w2 thrs = {hdl 2 thrs (worker 2; unit)}
 
 thr1 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
 -- thr1 thrs = {hdl 3 thrs (controller!; unit)}
-thr1 thrs = {sayCancel (hdl 1 thrs (controller!; unit))}
+thr1 thrs = {sayCancel (hdl 2 thrs (controller!; unit))}
 
 thr2 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
 -- thr2 thrs = {hdl 4 thrs (caller!)}
-thr2 thrs = {sayCancel (hdl 2 thrs (caller!))}
+thr2 thrs = {sayCancel (hdl 3 thrs (caller!))}
 
 -- -- All of these RefState adaptors are necessary, unfortunately.
 makeThreads : {[RefState] Ref (Threads [Console, Web])}
 makeThreads! =
     let thrs = new tnil in
     -- write thrs (<RefState> (fromList [w0, w1, w2, thr1, thr2] thrs 0));
-    write thrs (<RefState> (fromList [w0, thr1, thr2] thrs 0));
+    write thrs (<RefState> (fromList [w0, w1, thr1, thr2] thrs 0));
     thrs
 
 -- run : {Ref (Threads [E| Console]) -> [E| Console, RefState]Unit}
@@ -432,38 +369,10 @@ run thrs =
         { nothing -> unit
         | (just runner) -> (scheduleT (runner!) 0 thrs) }
 
--- runL : {Ref (Threads [E| LCancel, Console]) -> [E| Console, RefState]Unit}
--- runL thrs =
---     let readthrs = read thrs in
---     let runner = (lookupThkL 0 readthrs) in
---     case runner
---         { nothing -> unit
---         | (just runner) -> (scheduleL (runner!) 0 thrs) }
---     -- unit
-
 hdled : {[Console, Web, RefState]Unit}
 hdled! =
     let thrs = <Console, Web> makeThreads! in
     run thrs
 
--- hdledL : {[Console, Web, RefState] Unit}
--- hdledL! = let thrs = <Console, Web> makeThreads! in
---           runL thrs
-
 main : {[Console, Web, RefState] Unit}
 main! = hdled!
-
--- cancelThru : <LCancel> Unit -> [Console] Unit
--- cancelThru <lCancel -> k> = print "Cancelling thru\n"; unit -- ;   cancelThru (k unit)
--- cancelThru x = x
-
-
--- comp : {[LCancel] Unit}
--- comp! = lCancel!
-
-
--- main : {[Console, Web, RefState] Unit}
--- main! = cancelThru hdled!
-
--- main : {[Console] Unit}
--- main! = cancelThru (threadCancel comp!)
