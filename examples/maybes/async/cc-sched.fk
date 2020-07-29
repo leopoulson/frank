@@ -256,9 +256,9 @@ caller! =
     signal (cancel 0);
     print "in the middle\n";
     -- print (await p1);
-    let p2 = async {print "*- Hey !\n"; "bye !\n"} callCounter in
-    yield!;
-    print (await p2);
+    -- let p2 = async {print "*- Hey !\n"; "bye !\n"} callCounter in
+    -- yield!;
+    -- print (await p2);
     print "Finished!\n"
 
 ----------------------------
@@ -276,17 +276,19 @@ to_writeM2 (pid cell) cb =
                                    write cell (done res)
                       | (resume resumption) -> resumption susp! }}}}
 
-
 ----------------------------
 ----- Handling Promises
 ----------------------------
 
+lookCancel : {<LCancel> Unit -> [LCancel, Console] Unit}
+lookCancel <lCancel -> k> = print "Seen it!"; lCancel!; <LCancel(s a -> s a a)> (k unit)
+lookCancel unit = unit
 
 --- TODO: Maybe change the types so that LCancel can't leak out?
 -- hdl : {Int -> Ref (Threads [Console, Web, LCancel])
 hdl : {Int -> Ref (Threads [Console, Web, LCancel])
     -> <Promise[Console, Web, LCancel]> Unit
-    -> [Console, Web, LCancel, RefState, Yield] Unit}
+    -> [Console, Web, RefState, Yield] Unit}
 
 hdl thId thrs <promise (prom cb) -> k> =
     -- Create new pid cell
@@ -302,7 +304,10 @@ hdl thId thrs <promise (prom cb) -> k> =
          | (just susp) ->
              -- just { threadCancel (<LCancel> (hdl thId thrs susp!; rest!))} }} in
              -- just { let res = {<LCancel> (threadCancel susp!)} in
-             just { let res = {  (( susp!))} in
+             ------ PLAIN RUNNING
+             -- just { let res = {  print "Pre susp\n"; (( susp!)); print "Post susp\n"} in
+             --         ((hdl thId thrs res!; rest!))} }} in
+             just { let res = {  print "Pre susp\n"; (lookCancel ( susp!)); print "Post susp\n"} in
                      ((hdl thId thrs res!; rest!))} }} in
              -- just { let res = { threadCancel (<LCancel>( susp!))} in
              --         let h = {(( hdl thId thrs res!; rest!))} in
