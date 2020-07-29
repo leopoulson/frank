@@ -16,12 +16,17 @@ import Control.Monad
 import Data.IORef
 import qualified Data.Map.Strict as M
 import Data.List
+import Data.Maybe (fromMaybe)
 
 import System.Console.CmdArgs.Explicit
 import System.Directory
 import System.Environment
 import System.Exit
 import System.IO
+
+import Text.Read (readMaybe)
+
+import Debug.Trace (trace)
 
 type Args = [(String,[String])]
 
@@ -62,6 +67,19 @@ extractEvalUse (DefTm (Def _ _ [cls] _) _) = getBody cls
 
 glue :: Prog Desugared -> TopTm Desugared -> Prog Desugared
 glue (MkProg xs) x = MkProg (x : xs)
+
+parseYTLine :: String -> Maybe Int
+parseYTLine st
+  | take 7 st == "--! YT=" = readMaybe (drop 7 st)
+  | otherwise = Nothing
+
+default_thresh :: Int
+default_thresh = 4000
+
+parseYT :: FilePath -> IO Int
+parseYT fileName =
+  do mint <- (parseYTLine . head . lines) <$> readFile fileName
+     return (fromMaybe default_thresh mint)
 
 parseProg :: FilePath -> Args -> IO (Either String (Prog Raw))
 parseProg fileName args =
@@ -151,14 +169,13 @@ evalProg thresh env tm =
                v <- Shonky.ioHandler (comp, k)
                putStrLn $ (show . Shonky.ppVal) v
 
-default_thresh :: Int
-default_thresh = 4000
 
 compileAndRunProg :: String -> Args -> IO ()
 compileAndRunProg fileName args =
   do let progName = takeWhile (/= '.') fileName
      -- Here we need to look at the file to see if it's got a yielder in there
      prog <- parseProg fileName args
+     yieldThresh <- parseYT fileName
      case lookup "eval" args of
        Just [v] -> do tm <- parseEvalTm v
                       -- lift tm to top term and append to prog
@@ -169,17 +186,17 @@ compileAndRunProg fileName args =
                       p'' <- checkProg p' args
                       (use', _) <- checkUse p'' use
                       env <- compileProg progName (glue p'' ttm) args
-                      evalProg default_thresh env "%eval()"
+                      evalProg yieldThresh env "%eval()"
        Just _ -> die "only one evaluation point permitted"
        Nothing -> do p <- refineAndDesugarProg prog
                      p' <- checkProg p args
                      env <- compileProg progName p' args
                      case lookup "entry-point" args of
-                       Just [v] -> evalProg default_thresh env (v ++ "()")
+                       Just [v] -> evalProg yieldThresh env (v ++ "()")
                        Just _  -> die "only one entry point permitted"
                        Nothing ->
                          if existsMain p' then
-                           evalProg default_thresh env "main()"
+                           evalProg yieldThresh env "main()"
                          else
                            putStrLn ("Compilation successful! " ++
                                      "(no main function defined)")
