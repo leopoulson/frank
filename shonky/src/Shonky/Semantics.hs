@@ -130,7 +130,7 @@ compute g (SApp f as amb)    ls   =
      -- allowed to yield. `amb` is the ambient ability at that application.
      if (now > 400 && ("Yield" `elem` amb))
        then do modify (\x -> x - 400)
-               compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+               trace "*** Inserting!\n" $ compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
 
@@ -275,18 +275,20 @@ command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- s
 -- TODO: Perhaps invoking abort is not the correct way to fail
 -- We want to express that there is no matching rule for the incoming messages?
 tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
+
 -- If any of the comps are yields;
-tryRules f g [] cs ls = if (any isYield cs)
-  -- Make arguments for the passed-in function, which is the one being
-  -- performed, and reinvoke it. This expression doesn't need to be able to
-  -- yield, so can just explicitly pass in False.
-  then let (gUpdated, expargs) = makeArgs g cs in
-       compute gUpdated (SApp f expargs []) ls
-  -- if not, abort as before.
-  else command "abort" [] [] 0 ls
-  where
-    isYield (Call "yield" _ _ _) = True
-    isYield _ = False
+-- tryRules f g [] cs ls = if (any isYield cs)
+--   -- Make arguments for the passed-in function, which is the one being
+--   -- performed, and reinvoke it. This expression doesn't need to be able to
+--   -- yield, so can just explicitly pass in False.
+--   then let (gUpdated, expargs) = makeArgs g cs in
+--        compute gUpdated (SApp f expargs []) ls
+--   -- if not, abort as before.
+--   else command "abort" [] [] 0 ls
+--   where
+--     isYield (Call "yield" _ _ _) = True
+--     isYield _ = False
+   
 tryRules f g ((ps, e) : pes) cs ls = case matches g ps cs of
   Just g  -> compute g e ls                                                 -- rule matches, compute
   Nothing -> tryRules f g pes cs ls                                           -- rule fails, try next
