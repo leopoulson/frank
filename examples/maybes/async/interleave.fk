@@ -5,7 +5,7 @@ include tl_clean
 ---------------------
 -- Scheduling
 
-interface Yield = yield : Unit
+-- interface Yield = yield : Unit
 
 -- ScheduleT schedules threads, but uses the threads structure for this.
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [E| Console]) -> [E| Console, RefState]Unit}
@@ -97,7 +97,7 @@ canceller _ _ = nothing
 workBody : {{[InTask] String} -> Int -> [WebThreads] Unit}
 workBody p wid =
     promise (prom {s -> canceller wid s});
-    yield!;
+    -- yield!;
     -- Perform the comp
     let res = <Promise, RefState> p! in
     -- Send the result
@@ -286,13 +286,22 @@ async proc callCounter =
     -- and return the waiter.
     waiter
 
+sleepGranularity : {Int}
+sleepGranularity! = 1000
+
+sleepMany : {Int -> [Console, Yield] Unit}
+sleepMany x = sleep (sleepGranularity!);
+              sleepMany (x - sleepGranularity!)
+
 two_reqs : {[InTask] String}
 two_reqs! = let ans = remoteRequest "10" in
             print "10*10 = "; print ans; print "\n";
-            yield!;
+            -- yield!;
+            sleepMany 500000;
             let ans2 = remoteRequest ans in
             print "10*10*10 = "; print ans2; print "\n";
-            yield!;
+            -- yield!;
+            sleepMany 500000;
             let ans3 = remoteRequest ans in
             print "10*10*10*10 = "; print ans3; print "\n";
             -- Return ans2
@@ -309,8 +318,8 @@ callerInterleaved! =
     let callCounter = new 0 in
     let il = interleave two_reqs sleep_yield callCounter in
     -- let il = interleave sleep_yield two_reqs callCounter in
-    yield!;
-    yield!;
+    -- yield!;
+    -- yield!;
     await (il);
     print "Caller finished\n"
 

@@ -113,6 +113,9 @@ fetch g y = go g where
 -- Most of them take an Env and maintain an agenda (frame stack,
 -- commands-to-be-skipped).
 
+yield_thresh :: Int
+yield_thresh = 2000
+
 -- Given env `g` and framestack `ls`, compute expression.
 -- 1) Terminating exp: Feed value into top frame
 -- 2) Ongoing exp:     Create new frame
@@ -128,8 +131,8 @@ compute g (SApp f as amb)    ls   =
   do now <- get;
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield. `amb` is the ambient ability at that application.
-     if (now > 400 && ("Yield" `elem` amb))
-       then do modify (\x -> x - 400)
+     if (now > yield_thresh && ("Yield" `elem` amb))
+       then do modify (\x -> x - yield_thresh)
                trace "*** Inserting!\n" $ compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do modify (+1);
                compute g f (Fun g as : ls)
