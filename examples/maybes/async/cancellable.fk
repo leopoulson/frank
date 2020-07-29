@@ -49,7 +49,7 @@ data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = call {[InProm] String} Int | result String Int | cancel Int
          -- For workers
-         | workIn {[InProm] String} Int | workOut String Int
+         | workIn {[InProm] String} Int | workOut String Int | workCancel Int
 
 printSig : Sig -> [Console] Unit
 printSig (call _ x) = print "Call "; ouint x
@@ -85,16 +85,15 @@ interface WebThreads = [Promise[InProm], WTNP]
 -- -- Worker
 
 canceller : {Int -> Sig ->  Maybe {[WebThreads] Unit}}
-canceller wid (cancel wid') =
+canceller wid (workCancel wid') =
     if (wid == wid')
-        { just {print "Eek!"; lCancel!} }
+        { just {lCancel!} }
         { nothing }
 canceller _ _ = nothing
 
 workBody : {{[InProm] String} -> Int -> [WebThreads] Unit}
 workBody p wid =
     promise (prom {s -> canceller wid s});
-    print "Canceller installed on "; ouint wid; print "\n";
     yield!;
     -- Perform the comp
     let res = <Promise, RefState, Yield> p! in
@@ -117,7 +116,7 @@ workProm _ _ = nothing
 -- * Sends the result
 -- * Reinstalls itself.
 worker : {Int -> [WebThreads] Pid Unit [WebThreads]}
-worker wid = print "Worker installed\n"; promise (prom {s -> workProm wid s})
+worker wid = promise (prom {s -> workProm wid s})
 
 -- -------------
 -- -- Controller
@@ -127,6 +126,11 @@ findFree : List (Maybe Int) -> Maybe Int
 findFree [] = nothing
 findFree (nothing :: xs) = just 0 --mplus 1 (findFree xs)
 findFree ((just _) :: xs) = mplus 1 (findFree xs)
+
+lookupCall : Int -> List (Maybe Int) -> Maybe Int
+lookupCall _ [] = nothing
+lookupCall x (nothing :: ys) = mplus 1 (lookupCall x ys)
+lookupCall x ((just y) :: ys) = if (x == y) { just 0 } { mplus 1 (lookupCall x ys) }
 
 -- pMI : Maybe Int -> [Console] Unit
 -- pMI nothing = print "N "
@@ -142,7 +146,7 @@ onAsyncBody active p callId =
     case (newWorker)
         { nothing -> print "Sorry, we're full!\n"
         | (just wid) ->
-            print "Putting on "; ouint wid; print "\n";
+            -- print "Putting on "; ouint wid; print "\n";
             -- Update to say that workerId wid is active
             write active (putIn (just callId) wid (read active));
             signal (workIn p wid)};
@@ -164,13 +168,26 @@ onResultBody active res wid =
     promise (prom {s -> onResult active s});
     unit
 
-onResult : {Ref (List (Maybe Int)) -> Sig ->  Maybe {[WebThreads] Unit}}
+onResult : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
 onResult active (workOut res wid) =
     just { onResultBody active res wid }
 onResult _ _ = nothing
 
--- onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onCancelBody : {Ref (List (Maybe Int)) -> Int -> [WebThreads] Unit}
+onCancelBody active callId =
+    case (lookupCall callId (read active))
+         { nothing -> print "Cancelling a finished task\n"
+         -- Signal to the worker to stop, and also update active list
+         | (just wid) -> print "Cancelling task "; ouint callId; print " on worker "; ouint wid; print "\n";
+                         signal (workCancel wid);
+                         write active (putIn nothing wid (read active))};
+    promise (prom {s -> onCancel active s});
+    unit
 
+onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onCancel active (cancel callId) =
+    just {onCancelBody active callId}
+onCancel _ _ = nothing
 
 -- Controller will take procs and issue them on to workers.
 -- Keeps a list of which workers are busy.
@@ -181,6 +198,10 @@ controller! =
    promise (prom {s -> onAsync active s});
    promise (prom {s -> onAsync active s});
    promise (prom {s -> onAsync active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
    promise (prom {s -> onResult active s});
    promise (prom {s -> onResult active s});
    promise (prom {s -> onResult active s});
@@ -217,19 +238,15 @@ async proc callCounter =
 
 caller : {[WebThreads] Unit}
 caller! =
-    print "Caller starting\n";
-    let callCounter = new 50 in
+    let callCounter = new 0 in
     let p1 = async {print "*- Hey 1!\n"; "bye 1!\n"} callCounter in
     yield!;
-    yield!;
-    print "Caller Cancelling\n";
     signal (cancel 0);
-    print "in the middle\n";
     -- print (await p1);
-    let p2 = async {print "*- Hey !\n"; "bye !\n"} callCounter in
+    let p2 = async {print "*- Hey 3!\n"; "bye !\n"} callCounter in
     yield!;
     -- print (await p2);
-    print "Finished!\n"
+    print "Caller Finished\n"
 
 ----------------------------
 -- Callback utilities
@@ -276,7 +293,7 @@ cbPerhaps thId sig thrs cbMod rest =
         { nothing -> nothing
         -- | (just susp) -> let res = {stopCancel susp!} in
         --                  -- hdl thId thrs (stopCancel susp!); rest!}
-        --                  just { hdl thId thrs res!; rest! }}
+        --                  just { hdl thId thrs res!; rest! }
         -- | (just susp) -> just { stopCancel (hdl thId thrs susp!); rest! }}
         | (just susp) -> just { stopCancel (hdl thId thrs susp!; <LCancel> rest!) }}
 
@@ -303,6 +320,7 @@ hdl thId thrs <promise (prom cb) -> k> =
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
+    -- print "\nSignal in "; <LCancel, RefState, Web, Yield> (printSig sig); print "\n";
     let readthrs = read thrs in
     let newThrs = <Console, RefState, Web, Yield, LCancel>(runThreadsShallow sig (readthrs)) in
 
