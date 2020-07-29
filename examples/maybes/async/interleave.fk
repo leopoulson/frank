@@ -56,6 +56,8 @@ printSig (call _ x) = print "Call "; ouint x
 printSig (result st x) = print "Result "; print st; print " "; ouint x
 printSig (cancel x) = print "Cancel "; ouint x
 printSig (workIn _ x) = print "WorkIn "; ouint x
+printSig (workOut st x) = print "WorkOut "; print st; print " "; ouint x
+printSig (workCancel x) = print "WorkCancel "; ouint x
 printSig _ = unit
 
 ----------------------------
@@ -209,6 +211,53 @@ controller! =
    promise (prom {s -> onResult active s});
    unit
 
+----------------
+-- Interleaving
+
+
+cbBody : {String -> Int -> [WebThreads] String}
+cbBody res callB = signal (cancel callB); yield!; res
+
+lrWaiterBody : {String -> Int -> Int -> Int -> Maybe {[WebThreads] String}}
+lrWaiterBody res callNo callA callB =
+    -- case callNo
+    -- { callA -> just {cbBody res callB}
+    -- | callB -> just {cbBody res callA}
+    -- | _ -> nothing}
+    if (callNo == callA)
+        { just { cbBody res callB } }
+        -- Then check if it's B
+        { if (callNo == callB)
+            { just { cbBody res callA} }
+            { nothing }}
+
+leaveResWaiter : {Int -> Int -> [WebThreads] Pid String [WebThreads]}
+leaveResWaiter callA callB =
+    promise (prom
+        {(result res callNo) -> lrWaiterBody res callNo callA callB
+        | _ -> nothing})
+
+-- Runs the two given tasks; once one of them finishes, stops the other one.
+interleave : {{[InTask] String} -> {[InTask] String}
+          -> Ref Int -> [WebThreads] Pid String [WebThreads]}
+interleave procA procB callCounter =
+    -- Issue the two calls with signals.
+    let callNoA = read callCounter in
+    write callCounter (callNoA + 1);
+    let callNoB = read callCounter in
+    write callCounter (callNoB + 1);
+
+    -- Install a waiter to wait for the first result
+    let ileaveWaiter = (leaveResWaiter callNoA callNoB) in
+
+    -- Signal to start the other two
+    signal (call procA callNoA);
+    signal (call procB callNoB);
+
+    -- Just return waiter.
+    ileaveWaiter
+
+
 -- -------------
 -- -- Caller
 
@@ -237,17 +286,39 @@ async proc callCounter =
     -- and return the waiter.
     waiter
 
+two_reqs : {[InTask] String}
+two_reqs! = let ans = remoteRequest "10" in
+            print "10*10 = "; print ans; print "\n";
+            yield!;
+            let ans2 = remoteRequest ans in
+            print "10*10*10 = "; print ans2; print "\n";
+            yield!;
+            let ans3 = remoteRequest ans in
+            print "10*10*10*10 = "; print ans3; print "\n";
+            -- Return ans2
+            ans2
+
+sleep_yield : {[InTask] String}
+sleep_yield! = sleep 1000; print "Done sleeping!\n";
+               --yield!;
+               -- sleep 1000; print "Done sleeping!\n";
+               "ok"
+
+callerInterleaved : {[WebThreads] Unit}
+callerInterleaved! =
+    let callCounter = new 0 in
+    let il = interleave two_reqs sleep_yield callCounter in
+    -- let il = interleave sleep_yield two_reqs callCounter in
+    yield!;
+    yield!;
+    await (il);
+    print "Caller finished\n"
+
 -- Observe that we can cancel tasks halfway through processing, too
 callerWeb : {[WebThreads] Unit}
 callerWeb! =
     let callCounter = new 0 in
-    let p1 = async {let ans = remoteRequest "10" in
-                    print "Halfway; 10*10 = "; print ans; print "\n";
-                    yield!;
-                    let ans2 = remoteRequest ans in
-                    print "Done! 10*10*10 = "; print ans2; print "\n";
-                    -- Return ans2
-                    ans2} callCounter in
+    let p1 = async two_reqs callCounter in
     yield!;
     yield!;
     signal (cancel 0);
@@ -328,6 +399,7 @@ hdl thId thrs <promise (prom cb) -> k> =
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
+    -- print "\nSignal in "; <RefState, Web, Yield, LCancel> (printSig sig); print "\n";
     let readthrs = read thrs in
     let newThrs = <Console, RefState, Web, Yield, LCancel>(runThreadsShallow sig (readthrs)) in
 
@@ -375,7 +447,7 @@ thr1 thrs = {sayCancel (hdl 2 thrs (controller!; unit))}
 
 thr2 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
 -- thr2 thrs = {hdl 4 thrs (caller!)}
-thr2 thrs = {sayCancel (hdl 3 thrs (callerWeb!))}
+thr2 thrs = {sayCancel (hdl 3 thrs (callerInterleaved!))}
 
 -- -- All of these RefState adaptors are necessary, unfortunately.
 makeThreads : {[RefState] Ref (Threads [Console, Web])}
