@@ -33,7 +33,7 @@ keysL tnil = []
 keysL (tentry k _ _ rest) = k :: keysL rest
 
 -- Adds a callback cb for thread id k
-addCb : {Int -> {Sig -> {[E| RefState, Yield] Unit} ->  Maybe {[E| RefState, Yield] Unit}} -> Threads [E|] -> [_|] Threads [E|]}
+addCb : {Int -> {Sig -> {[E| RefState, Yield] Unit} ->  Maybe {[E| RefState, Yield] Unit}} -> Threads [E|] ->  Threads [E|]}
 addCb k cb tnil = tnil
 addCb k cb (tentry k' thk q rest) =
    if (k == k')
@@ -89,6 +89,9 @@ runThread sig (trio susp cbs skipped) =
 
 ---- Shallow handling;
 -- I.e, only execute ONE promise on each thread.
+
+
+
 runThreadsShallow : {Sig -> Threads [E|] ->  Threads [E|]}
 runThreadsShallow _ (tnil) = tnil
 runThreadsShallow sig (tentry k susp cbs rest) =
