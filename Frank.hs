@@ -141,9 +141,9 @@ compileProg progName p args =
   else return $ Shonky.load $ compile p
 
 -- This is where any commands to be handled 'outside' of Frank get handled.
-evalProg :: Shonky.Env -> String -> IO ()
-evalProg env tm =
-  case Shonky.try env tm of
+evalProg :: Int -> Shonky.Env -> String -> IO ()
+evalProg thresh env tm =
+  case Shonky.try thresh env tm of
     (Shonky.Ret v, _) -> putStrLn $ (show . Shonky.ppVal) v
     -- returning operation call and count so far
     (comp, k) -> do -- putStrLn $ "Generated computation: " ++ show comp
@@ -151,9 +151,13 @@ evalProg env tm =
                v <- Shonky.ioHandler (comp, k)
                putStrLn $ (show . Shonky.ppVal) v
 
+default_thresh :: Int
+default_thresh = 4000
+
 compileAndRunProg :: String -> Args -> IO ()
 compileAndRunProg fileName args =
   do let progName = takeWhile (/= '.') fileName
+     -- Here we need to look at the file to see if it's got a yielder in there
      prog <- parseProg fileName args
      case lookup "eval" args of
        Just [v] -> do tm <- parseEvalTm v
@@ -165,17 +169,17 @@ compileAndRunProg fileName args =
                       p'' <- checkProg p' args
                       (use', _) <- checkUse p'' use
                       env <- compileProg progName (glue p'' ttm) args
-                      evalProg env "%eval()"
+                      evalProg default_thresh env "%eval()"
        Just _ -> die "only one evaluation point permitted"
        Nothing -> do p <- refineAndDesugarProg prog
                      p' <- checkProg p args
                      env <- compileProg progName p' args
                      case lookup "entry-point" args of
-                       Just [v] -> evalProg env (v ++ "()")
+                       Just [v] -> evalProg default_thresh env (v ++ "()")
                        Just _  -> die "only one entry point permitted"
                        Nothing ->
                          if existsMain p' then
-                           evalProg env "main()"
+                           evalProg default_thresh env "main()"
                          else
                            putStrLn ("Compilation successful! " ++
                                      "(no main function defined)")

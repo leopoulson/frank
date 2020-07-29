@@ -84,8 +84,26 @@ type Agenda = [Frame]
 type SkippedAgenda = [Frame]
 -- [Frame]: Skipped frames (most recently skipped frame is on top)
 
+type CState = (Int, Int)
+
 -- Counts the number of function calls, so we can insert yields.
-type Count s = State Int s
+type Count s = State CState s
+
+incrCount :: Count ()
+incrCount = do (c, t) <- get
+               put (c + 1, t)
+
+getCount :: Count Int
+getCount = fst <$> get
+
+subtractThresh :: Count ()
+subtractThresh = do (c, t) <- get
+                    put (c - yield_thresh, t)
+
+counterOverThresh :: Count Bool
+-- counterOverThresh = do (c, t) <- get
+--                        c >= t
+counterOverThresh = (\(c, t) -> c >= t) <$> get
 
 envToList :: Env -> [[Def Val]]
 envToList g = envToList' g []
@@ -128,13 +146,13 @@ compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save
 
 -- 2) Application. Compute function. Save args for later.
 compute g (SApp f as amb)    ls   =
-  do now <- get;
+  do cOverT <- counterOverThresh
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield. `amb` is the ambient ability at that application.
-     if (now > yield_thresh && ("Yield" `elem` amb))
-       then do modify (\x -> x - yield_thresh)
+     if (cOverT && ("Yield" `elem` amb))
+       then do subtractThresh;
                trace "*** Inserting!\n" $ compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
-       else do modify (+1);
+       else do incrCount;
                compute g f (Fun g as : ls)
 
 -- original
@@ -414,7 +432,7 @@ prog g ds = g' where
   g' = g :/ map ev ds
   ev (DF f hss pes) = DF f hss pes
   ev (x := e) = x := v where
-    Ret v = evalState (compute g' e []) 0
+    Ret v = evalState (compute g' e []) (0, yield_thresh)
 
 load :: [Def Exp] -> Env
 load = prog envBuiltins
@@ -428,8 +446,8 @@ loadFile x = do
   return (prog envBuiltins d)
 
 -- Given env `g` and id `s`,
-try :: Env -> String -> (Comp, Int)
-try g s = runState (compute g e []) 0 where
+try :: Int -> Env -> String -> (Comp, CState)
+try t g s = runState (compute g e []) (0, t) where
   Just (e, "") = parse pExp s
 
 ------------------------
@@ -437,7 +455,7 @@ try g s = runState (compute g e []) 0 where
 
 -- inch, ouch, inint and ouint commands in the IO monad
 -- only if the level is 0 --TODO LC: rethink this?
-ioHandler :: (Comp, Int) -> IO Val
+ioHandler :: (Comp, CState) -> IO Val
 ioHandler (Ret v, _) = return v
 -- Console commands
 ioHandler (Call "inch" 0 [] ks, count) =
