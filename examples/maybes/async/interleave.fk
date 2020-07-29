@@ -1,0 +1,475 @@
+include std
+
+include tl_clean
+
+---------------------
+-- Scheduling
+
+interface Yield = yield : Unit
+
+-- ScheduleT schedules threads, but uses the threads structure for this.
+scheduleT : {<Yield> Unit -> Int -> Ref (Threads [E| Console]) -> [E| Console, RefState]Unit}
+scheduleT <yield -> k> cur thrs =
+    -- Find which thread id is the next one to be ran.
+    -- let readthrs = read thrs in
+    let next = (nextId cur (keys (read thrs))) in
+
+    -- Look up this new thunk.
+    let newThk = (fromMaybe (lookupThk next (read thrs))) in
+    -- Thunk current continuation; write this in threads
+    let newThrs = (writeThk cur {k unit} (read thrs)) in
+    write thrs newThrs;
+
+    -- Restart with new continuation
+    -- print "\n Changing to "; ouint next; print "\n";
+    scheduleT newThk! next thrs
+
+-- If the thread ends, just force a yield.
+scheduleT unit cur thrs = scheduleT yield! cur thrs
+
+-- Finds the next highest ID in threads.
+-- If there isn't one higher, i.e. the current is the max, finds the lowest.
+nextId : {Int -> List Int -> Int}
+nextId cur xs =
+   let lgt = leastGT cur 100 xs in
+   if (lgt == 100) -- i.e. cur is max
+       { lowest 100 xs }
+       { lgt }
+
+----------------------------
+-- Promise structures.
+
+interface Promise [E] =
+          promise R : Prom R [E|] -> Pid R [E | Promise[E|], RefState, Yield]
+        | signal : Sig -> Unit
+        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
+
+-- Effects can be performed in the guard, just NO promises.
+data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
+
+data Sig = call {[InTask] String} Int | result String Int | cancel Int
+         -- For workers
+         | workIn {[InTask] String} Int | workOut String Int | workCancel Int
+
+printSig : Sig -> [Console] Unit
+printSig (call _ x) = print "Call "; ouint x
+printSig (result st x) = print "Result "; print st; print " "; ouint x
+printSig (cancel x) = print "Cancel "; ouint x
+printSig (workIn _ x) = print "WorkIn "; ouint x
+printSig (workOut st x) = print "WorkOut "; print st; print " "; ouint x
+printSig (workCancel x) = print "WorkCancel "; ouint x
+printSig _ = unit
+
+----------------------------
+-- Pids
+
+data Pid X = pid (Ref (PromiseStatus X))
+
+data PromiseStatus X = waiting | done X | resume {X -> Unit}
+
+readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (pid cell) = read cell
+
+writePid : {Pid X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (pid cell) x = write cell x
+
+----------------------------
+-- Threads
+
+interface LCancel = lCancel : Unit
+
+-- Alias for all of the necessary threads
+interface InProm = [Web, Console, LCancel]
+interface InTask = [InProm, Yield]
+interface WTNP = [Web, Console, RefState, Yield, LCancel]
+interface WebThreads = [Promise[InProm], WTNP]
+
+-- ------------
+-- -- Worker
+
+canceller : {Int -> Sig ->  Maybe {[WebThreads] Unit}}
+canceller wid (workCancel wid') =
+    if (wid == wid')
+        { just {lCancel!} }
+        { nothing }
+canceller _ _ = nothing
+
+workBody : {{[InTask] String} -> Int -> [WebThreads] Unit}
+workBody p wid =
+    promise (prom {s -> canceller wid s});
+    yield!;
+    -- Perform the comp
+    let res = <Promise, RefState> p! in
+    -- Send the result
+    signal (workOut res wid);
+    -- Reinstall worker
+    worker wid;
+    unit
+
+workProm : {Int -> Sig -> Maybe {[WebThreads] Unit}}
+workProm wid (workIn p wid') =
+    if (wid == wid')
+        { just {workBody p wid'} }
+        { nothing }
+workProm _ _ = nothing
+
+-- What does the worker do?
+-- * It waits for a signal to execute
+-- * Runs the supplied process
+-- * Sends the result
+-- * Reinstalls itself.
+worker : {Int -> [WebThreads] Pid Unit [WebThreads]}
+worker wid = promise (prom {s -> workProm wid s})
+
+-- -------------
+-- -- Controller
+
+
+findFree : List (Maybe Int) -> Maybe Int
+findFree [] = nothing
+findFree (nothing :: xs) = just 0 --mplus 1 (findFree xs)
+findFree ((just _) :: xs) = mplus 1 (findFree xs)
+
+lookupCall : Int -> List (Maybe Int) -> Maybe Int
+lookupCall _ [] = nothing
+lookupCall x (nothing :: ys) = mplus 1 (lookupCall x ys)
+lookupCall x ((just y) :: ys) = if (x == y) { just 0 } { mplus 1 (lookupCall x ys) }
+
+-- pMI : Maybe Int -> [Console] Unit
+-- pMI nothing = print "N "
+-- pMI (just k) = print "J("; ouint k; print ") "
+
+-- printList : List (Maybe Int) -> [Console] Unit
+-- printList l = map pMI l; print "\n"
+
+onAsyncBody : {Ref (List (Maybe Int)) -> {[InTask] String} -> Int -> [WebThreads] Unit}
+onAsyncBody active p callId =
+    -- print "on Async running\n";
+    let newWorker = findFree (read active) in
+    case (newWorker)
+        { nothing -> print "Sorry, we're full!\n"
+        | (just wid) ->
+            -- print "Putting on "; ouint wid; print "\n";
+            -- Update to say that workerId wid is active
+            write active (putIn (just callId) wid (read active));
+            signal (workIn p wid)};
+    promise (prom {s -> onAsync active s});
+    unit
+
+onAsync : {Ref (List (Maybe Int)) -> Sig ->  Maybe {[WebThreads] Unit}}
+onAsync active (call p callId) =
+    just {onAsyncBody active p callId}
+onAsync _ _ = nothing
+
+onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebThreads] Unit}
+onResultBody active res wid =
+    let cid = nth wid (read active) in
+    case cid
+        { nothing -> print "Got result back from incorrect worker\n"
+        | (just k) -> write active (putIn nothing wid (read active));
+                      signal (result res k)};
+    promise (prom {s -> onResult active s});
+    unit
+
+onResult : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onResult active (workOut res wid) =
+    just { onResultBody active res wid }
+onResult _ _ = nothing
+
+onCancelBody : {Ref (List (Maybe Int)) -> Int -> [WebThreads] Unit}
+onCancelBody active callId =
+    case (lookupCall callId (read active))
+         { nothing -> print "Cancelling a finished task\n"
+         -- Signal to the worker to stop, and also update active list
+         | (just wid) -> print "Cancelling task "; ouint callId; print " on worker "; ouint wid; print "\n";
+                         signal (workCancel wid);
+                         write active (putIn nothing wid (read active))};
+    promise (prom {s -> onCancel active s});
+    unit
+
+onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onCancel active (cancel callId) =
+    just {onCancelBody active callId}
+onCancel _ _ = nothing
+
+-- Controller will take procs and issue them on to workers.
+-- Keeps a list of which workers are busy.
+controller : {[WebThreads] Unit}
+controller! =
+   let active = new [nothing, nothing, nothing, nothing, nothing] in
+   promise (prom {s -> onAsync active s});
+   promise (prom {s -> onAsync active s});
+   promise (prom {s -> onAsync active s});
+   promise (prom {s -> onAsync active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onCancel active s});
+   promise (prom {s -> onResult active s});
+   promise (prom {s -> onResult active s});
+   promise (prom {s -> onResult active s});
+   promise (prom {s -> onResult active s});
+   unit
+
+----------------
+-- Interleaving
+
+
+cbBody : {String -> Int -> [WebThreads] String}
+cbBody res callB = signal (cancel callB); yield!; res
+
+lrWaiterBody : {String -> Int -> Int -> Int -> Maybe {[WebThreads] String}}
+lrWaiterBody res callNo callA callB =
+    -- case callNo
+    -- { callA -> just {cbBody res callB}
+    -- | callB -> just {cbBody res callA}
+    -- | _ -> nothing}
+    if (callNo == callA)
+        { just { cbBody res callB } }
+        -- Then check if it's B
+        { if (callNo == callB)
+            { just { cbBody res callA} }
+            { nothing }}
+
+leaveResWaiter : {Int -> Int -> [WebThreads] Pid String [WebThreads]}
+leaveResWaiter callA callB =
+    promise (prom
+        {(result res callNo) -> lrWaiterBody res callNo callA callB
+        | _ -> nothing})
+
+-- Runs the two given tasks; once one of them finishes, stops the other one.
+interleave : {{[InTask] String} -> {[InTask] String}
+          -> Ref Int -> [WebThreads] Pid String [WebThreads]}
+interleave procA procB callCounter =
+    -- Issue the two calls with signals.
+    let callNoA = read callCounter in
+    write callCounter (callNoA + 1);
+    let callNoB = read callCounter in
+    write callCounter (callNoB + 1);
+
+    -- Install a waiter to wait for the first result
+    let ileaveWaiter = (leaveResWaiter callNoA callNoB) in
+
+    -- Signal to start the other two
+    signal (call procA callNoA);
+    signal (call procB callNoB);
+
+    -- Just return waiter.
+    ileaveWaiter
+
+
+-- -------------
+-- -- Caller
+
+-- This is the remote web request
+remoteRequest : {String -> [Web]String}
+remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
+
+-- -- Doesn't fire if the callnumber doesn't match.
+resultWaiter : {Int -> [WebThreads] Pid String [WebThreads]}
+resultWaiter callNo =
+    promise (prom {(result res callNo') -> if (callNo == callNo') { just {res} } {nothing}
+                                   |  _ -> nothing})
+
+-- Caller takes a process and a callID
+-- it sends a signal to run the process, then installs a promise to wait the result.
+async : {[InTask] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
+async proc callCounter =
+    -- print "Asyncing!\n";
+    let callNo = read callCounter in
+    -- Install the result waiter before we call.
+    let waiter = (resultWaiter callNo) in
+    -- Then make the request to perform proc
+    signal (call proc callNo);
+    -- Increment callcounter
+    write callCounter (callNo + 1);
+    -- and return the waiter.
+    waiter
+
+two_reqs : {[InTask] String}
+two_reqs! = let ans = remoteRequest "10" in
+            print "10*10 = "; print ans; print "\n";
+            yield!;
+            let ans2 = remoteRequest ans in
+            print "10*10*10 = "; print ans2; print "\n";
+            yield!;
+            let ans3 = remoteRequest ans in
+            print "10*10*10*10 = "; print ans3; print "\n";
+            -- Return ans2
+            ans2
+
+sleep_yield : {[InTask] String}
+sleep_yield! = sleep 1000; print "Done sleeping!\n";
+               --yield!;
+               -- sleep 1000; print "Done sleeping!\n";
+               "ok"
+
+callerInterleaved : {[WebThreads] Unit}
+callerInterleaved! =
+    let callCounter = new 0 in
+    let il = interleave two_reqs sleep_yield callCounter in
+    -- let il = interleave sleep_yield two_reqs callCounter in
+    yield!;
+    yield!;
+    await (il);
+    print "Caller finished\n"
+
+-- Observe that we can cancel tasks halfway through processing, too
+callerWeb : {[WebThreads] Unit}
+callerWeb! =
+    let callCounter = new 0 in
+    let p1 = async two_reqs callCounter in
+    yield!;
+    yield!;
+    signal (cancel 0);
+    print "Caller Finished\n"
+
+
+caller : {[WebThreads] Unit}
+caller! =
+    let callCounter = new 0 in
+    let p1 = async {print "*- Hey 1!\n"; "bye 1!\n"} callCounter in
+    signal (cancel 0);
+    -- print (await p1);
+    let p2 = async {print "*- Hey 3!\n"; "bye !\n"} callCounter in
+    yield!;
+    -- print (await p2);
+    print "Caller Finished\n"
+
+----------------------------
+-- Callback utilities
+--
+-- to_writeM2 : Pid R [E|RefState]
+--           -> {S -> [K|] (Maybe {[E|RefState] R})}
+--           -> {S -> [K|] (Maybe {[E|RefState] Unit})}
+to_writeM2 : Pid R [E|RefState]
+          -> {S -> (Maybe {[E|RefState] R})}
+          -> {S -> (Maybe {[E|RefState] Unit})}
+to_writeM2 (pid cell) cb =
+    {x -> case (cb x)
+         { nothing -> nothing
+         | (just susp) ->
+             just {case (read cell)
+                      { waiting -> let res = susp! in
+                                   write cell (done res)
+                      | (resume resumption) -> resumption susp! }}}}
+
+----------------------------
+----- Handling Promises
+----------------------------
+
+lookCancel : {<LCancel> Unit -> [LCancel, Console] Unit}
+lookCancel <lCancel -> k> = print "Seen it!"; lCancel!; <LCancel(s a -> s a a)> (k unit)
+lookCancel unit = unit
+
+stopCancel : {<LCancel> Unit -> [Console] Unit}
+stopCancel <lCancel -> k> = print "***** Stopping cancel\n"
+stopCancel unit = unit
+
+cbPerhaps : {Int -> Sig -> Ref (Threads [Console, Web])
+          -> {Sig -> (Maybe {[Promise[Console, Web, LCancel], Console, Web, LCancel, RefState, Yield]Unit})}
+          -> {[Console, Web, RefState, Yield] Unit}
+          -> Maybe {[Console, Web, RefState, Yield] Unit}}
+cbPerhaps thId sig thrs cbMod rest =
+    case (cbMod sig)
+        { nothing -> nothing
+        | (just susp) -> just { stopCancel (hdl thId thrs susp!; <LCancel> rest!) }}
+
+--- TODO: Maybe change the types so that LCancel can't leak out?
+-- This isn't possible I don't think.
+-- hdl : {Int -> Ref (Threads [Console, Web, LCancel])
+hdl : {Int -> Ref (Threads [Console, Web])
+    -> <Promise[Console, Web, LCancel]> Unit
+    -> [Console, Web, RefState, Yield, LCancel] Unit}
+
+hdl thId thrs <promise (prom cb) -> k> =
+    -- Create new pid cell
+    let cell = pid (new waiting) in
+    -- Process callback to convert to general form
+    let cbMod = <Console, RefState, Web, Yield, LCancel> (to_writeM2 cell cb) in
+
+    let cbM = {sig rest -> (cbPerhaps thId sig thrs cbMod rest)} in
+
+    let readthrs = read thrs in
+    let queued = <Console, RefState, Web, Yield, LCancel>(addCb thId cbM (readthrs)) in
+
+    -- Write the resumption to the cell and resume.
+    write thrs queued;
+    hdl thId thrs (k cell)
+
+-- So in this case, we want to go to each _thread_ and run the installed callbacks.
+hdl thId thrs <signal sig -> thr> =
+    -- print "\nSignal in "; <RefState, Web, Yield, LCancel> (printSig sig); print "\n";
+    let readthrs = read thrs in
+    let newThrs = <Console, RefState, Web, Yield, LCancel>(runThreadsShallow sig (readthrs)) in
+
+    write thrs newThrs;
+    hdl thId thrs (thr unit)
+
+hdl thId thrs <await cell -> thr> =
+    case (readPid cell)
+        { (done x) ->
+            hdl thId thrs (thr x)
+        | waiting ->
+            writePid cell (resume thr);
+            hdl thId thrs unit
+        }
+
+hdl thId thrs unit = unit
+
+-------------------------------------
+-- Running
+
+interface CRWY = [Console, RefState, Web, Yield]
+interface CW = [Console, Web]
+
+sayCancel : {<LCancel> Unit -> [Console] Unit}
+sayCancel <lCancel -> _> = print "top level cancel"; unit
+sayCancel unit = unit
+
+fromList : {List {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+           -> Ref (Threads [Console, Web]) -> Int -> Threads [Console, Web]}
+fromList [] _ _ = tnil
+fromList (f :: fs) thrs k = tentry k (<RefState> (f thrs)) (tq []) (fromList fs thrs (k + 1))
+
+w0 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+w0 thrs = {((sayCancel(hdl 0 thrs (worker 0; unit))))}
+
+w1 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+w1 thrs = {((sayCancel(hdl 1 thrs (worker 1; unit))))}
+
+-- w2 : {Ref (Threads [InProm]) -> {[WTNP] Unit}}
+-- w2 thrs = {hdl 2 thrs (worker 2; unit)}
+
+thr1 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+-- thr1 thrs = {hdl 3 thrs (controller!; unit)}
+thr1 thrs = {sayCancel (hdl 2 thrs (controller!; unit))}
+
+thr2 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
+-- thr2 thrs = {hdl 4 thrs (caller!)}
+thr2 thrs = {sayCancel (hdl 3 thrs (callerInterleaved!))}
+
+-- -- All of these RefState adaptors are necessary, unfortunately.
+makeThreads : {[RefState] Ref (Threads [Console, Web])}
+makeThreads! =
+    let thrs = new tnil in
+    -- write thrs (<RefState> (fromList [w0, w1, w2, thr1, thr2] thrs 0));
+    write thrs (<RefState> (fromList [w0, w1, thr1, thr2] thrs 0));
+    thrs
+
+-- run : {Ref (Threads [E| Console]) -> [E| Console, RefState]Unit}
+run : {Ref (Threads [Web, Console]) -> [Web, Console, RefState]Unit}
+run thrs =
+    let readthrs = read thrs in
+    let runner = (lookupThk 0 readthrs) in
+    case runner
+        { nothing -> unit
+        | (just runner) -> (scheduleT (runner!) 0 thrs) }
+
+hdled : {[Console, Web, RefState]Unit}
+hdled! =
+    let thrs = <Console, Web> makeThreads! in
+    run thrs
+
+main : {[Console, Web, RefState] Unit}
+main! = hdled!

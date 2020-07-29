@@ -57,7 +57,7 @@ data Sig = go Int | stop Int
 
 data Pid X = pid (Ref (PromiseStatus X))
 
-data PromiseStatus X = empty | done X | addRes {X -> Unit}
+data PromiseStatus X = empty | done X | resume {X -> Unit}
 
 readPid : {Pid X [E|] -> [RefState] PromiseStatus X [E|]}
 readPid (pid cell) = read cell
@@ -152,7 +152,7 @@ to_writeM2 (pid cell) cb =
          | (just susp) ->
              just {case (read cell)
                       { empty -> write cell (done susp!)
-                      | (addRes resumption) -> resumption susp!}} }}
+                      | (resume resumption) -> resumption susp!}} }}
 
 print_yield : {String -> [Console, Yield]Unit}
 print_yield st = print st; print "\n";
@@ -182,34 +182,26 @@ hdl thId thrs <promise (prom cb) -> k> =
     let readthrs = read thrs in
     let queued = <Console, RefState, Yield>(addCb thId (cbMaybe) readthrs) in
 
-    -- Write the resumption to the cell and resume.
-    let res = {(hdl thId thrs (k cell))} in
-    write thrs (<Console, Yield, RefState>(writeThk thId res queued));
-    res!
+    write thrs queued;
+    hdl thId thrs (k cell)
 
 -- So in this case, we want to go to each _thread_ and run the installed callbacks.
 hdl thId thrs <signal sig -> thr> =
     let readthrs = read thrs in
     let newThrs = <Console, Yield, RefState>(runThreads sig (readthrs)) in
 
-    let res = {hdl thId thrs (thr unit)} in
-    write thrs (<Console, Yield, RefState>(writeThk thId res newThrs));
-    res!
+    write thrs newThrs;
+    hdl thId thrs (thr unit)
 
 hdl thId thrs <await cell -> thr> =
     case (readPid cell)
-         { (done x) ->
-                 let readthrs = read thrs in
-                 let res = {hdl thId thrs (thr x)} in
-                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
-                 res!
-         -- thr2 has Fork in ambient, but addRes won't allow that.
-         | empty -> writePid cell (addRes thr);
-                 let readthrs = read thrs in
-                 let res = {hdl thId thrs unit} in
-                 write thrs (<Console, RefState, Yield>(writeThk thId res readthrs));
-                 res!}
-
+        { (done x) ->
+            hdl thId thrs (thr x)
+        | waiting ->
+            writePid cell (resume thr);
+            hdl thId thrs unit
+        }
+   
 hdl thId thrs unit = unit
 
 -------------------------------------

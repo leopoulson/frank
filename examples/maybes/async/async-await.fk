@@ -82,7 +82,7 @@ resultWaiter callNo = promise (prom { (result res callNo') -> if (callNo == call
 
 -- Caller takes a process and a callID
 -- it sends a signal to run the process, then installs a promise to wait the result.
-async : {{[Console, Web] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]}
+async : {[Console, Web] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
 async proc callCounter =
     let callNo = read callCounter in
     -- Install the result waiter before we call.
@@ -119,7 +119,7 @@ caller! =
     print "Caller starting\n";
     let callCounter = new 0 in
     let p1 = async {print "*- Hey!\n"; "bye!"} callCounter in
-    print "Wowzer - in the middle!\n";
+    print "in the middle!\n";
     print (await p1)
 
 

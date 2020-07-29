@@ -1,0 +1,111 @@
+interface Es = [Console, RefState, Yield]
+
+data TQueue X = tq (List X)
+
+enqueue : {X -> TQueue X -> TQueue X}
+-- enqueue x (tq xs) = tq (snoc xs x)
+enqueue x (tq xs) = tq (x :: xs)
+
+dequeue : {TQueue X -> Maybe (Pair X (TQueue X))}
+dequeue (tq []) = nothing
+dequeue (tq (x :: xs)) = just (pair x (tq xs))
+
+qjoin : {TQueue X -> TQueue X -> TQueue X}
+qjoin todo skipped =
+   case (dequeue todo)
+       { nothing -> skipped
+       | (just (pair x xs)) -> qjoin xs (enqueue x skipped)}
+
+data Threads [E] = tentry Int {[E| RefState, Yield] Unit}
+                          (TQueue {Sig -> {[E| RefState, Yield] Unit} -> [E|RefState, Yield] Maybe {[E| RefState, Yield] Unit}}) (Threads [E|])
+                 | tnil
+
+keys : {Threads [E|] -> [E| RefState]List Int}
+keys tnil = []
+keys (tentry k _ _ rest) = k :: keys rest
+
+keysE : {Threads [_|] -> List Int}
+keysE tnil = []
+keysE (tentry k _ _ rest) = k :: keysE rest
+
+keysL : {Threads [E| LCancel, Console] -> [E| Console, RefState]List Int}
+keysL tnil = []
+keysL (tentry k _ _ rest) = k :: keysL rest
+
+-- Adds a callback cb for thread id k
+addCb : {Int -> {Sig -> {[E| RefState, Yield] Unit} -> [E|RefState, Yield] Maybe {[E| RefState, Yield] Unit}} -> Threads [E|] -> [_|] Threads [E|]}
+addCb k cb tnil = tnil
+addCb k cb (tentry k' thk q rest) =
+   if (k == k')
+     { tentry k' thk (enqueue cb q) rest }
+     { tentry k' thk q (addCb k cb rest) }
+
+writeThk : {Int -> {[E| RefState, Yield] Unit} -> Threads [E|] -> [_|] Threads [E|]}
+writeThk _ _ tnil = tnil
+writeThk k newThk (tentry k' thk q rest) =
+    if (k == k')
+      { tentry k' newThk q rest }
+      { tentry k' thk q (writeThk k newThk rest) }
+
+
+lookupThk : {Int -> Threads [E|] -> [E| RefState] Maybe {[E| RefState, Yield] Unit}}
+lookupThk k tnil = nothing
+lookupThk k (tentry k' thk _ rest) =
+    if (k == k')
+      { just thk }
+      { lookupThk k rest }
+
+lookupThkL : {Int -> Threads [E|LCancel, Console] -> [E|Console, RefState] Maybe {[E| Console, RefState, Yield, LCancel] Unit}}
+lookupThkL k tnil = nothing
+lookupThkL k (tentry k' thk _ rest) =
+    if (k == k')
+      { just thk }
+      { lookupThkL k rest }
+
+runThreads : {Sig -> Threads [E|] -> [E|RefState, Yield] Threads [E|]}
+runThreads _ (tnil) = tnil
+runThreads sig (tentry k susp cbs rest) =
+    -- Run the given thread w/ the incoming signal.
+    let pUp = (runThread sig (trio susp cbs (tq []))) in
+    -- Do the same on the rest of them.
+    tentry k (fstT pUp) (thdT pUp) (runThreads sig rest)
+
+runThread : {Sig -> Trio {[E|] Unit}
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+          -> [E|] Trio {[E|] Unit}
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})}
+runThread sig (trio susp cbs skipped) =
+    case (dequeue cbs)
+        -- If we have nothing left to run, just stop and return.
+        { nothing -> trio susp cbs skipped
+        | (just (pair cb cbs)) -> case (cb sig susp)
+                                     { nothing -> runThread sig (trio susp cbs (enqueue cb skipped))
+                                     | (just susp2) -> runThread sig (trio susp2 cbs skipped) }}
+
+
+---- Shallow handling;
+-- I.e, only execute ONE promise on each thread.
+runThreadsShallow : {Sig -> Threads [E|] -> [E|RefState, Yield] Threads [E|]}
+runThreadsShallow _ (tnil) = tnil
+runThreadsShallow sig (tentry k susp cbs rest) =
+    -- Run the given thread w/ the incoming signal.
+    let pUp = (runThreadShallow sig (trio susp cbs (tq []))) in
+    -- Do the same on the rest of them.
+    tentry k (fstT pUp) (qjoin (sndT pUp) (thdT pUp)) (runThreadsShallow sig rest)
+
+runThreadShallow : {Sig -> Trio {[E|] Unit}
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                         (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+          -> [E|] Trio {[E|] Unit}
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})
+                  (TQueue {Sig -> {[E|]Unit} -> [E|] Maybe {[E|]Unit}})}
+runThreadShallow sig (trio susp cbs skipped) =
+    case (dequeue cbs)
+    --     -- If we have nothing left to run, just stop and return.
+        { nothing -> trio susp cbs skipped
+        | (just (pair cb cbs)) -> case (cb sig susp)
+                                     { nothing -> runThreadShallow sig (trio susp cbs (enqueue cb skipped))
+                                     -- In shallow case, we only run one successful one.
+                                     | (just susp2) -> (trio susp2 cbs skipped) }}
