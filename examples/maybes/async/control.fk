@@ -90,7 +90,7 @@ resultWaiter callNo = promise (prom { (result res callNo') -> if (callNo == call
 -- it sends a signal to run the process, then installs a promise to wait the result.
 async : {[InProm] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
 async proc callCounter =
-    print "Asyncing!\n";
+    -- print "Asyncing!\n";
     let callNo = read callCounter in
     -- Install the result waiter before we call.
     let waiter = (resultWaiter callNo) in
@@ -109,11 +109,11 @@ caller! =
     -- yield!;
     let p2 = async {print "*- hey 0!\n"; "bye 0!"} callCounter in
     yield!;
-    let p2 = async {print "*--------------- hey 0!\n"; "bye 0!"} callCounter in
+    let p3 = async {print "*- hey 2!\n"; "bye 2!"} callCounter in
     print "in the middle\n";
-    print (await p1);
-    print (await p2);
-    print "Finished!"
+    -- print (await p1);
+    -- print (await p2);
+    print "Finished!\n"
 
 
 ------------
@@ -146,14 +146,6 @@ worker wid = promise (prom {s -> workProm wid s})
 -------------
 -- Controller
 
-mplus : Int -> Maybe Int -> Maybe Int
-mplus _ nothing = nothing
-mplus x (just y) = just (x + y)
-
-putIn : X -> Int -> List X -> List X
-putIn _ _ [] = []
-putIn x 0 (_ :: ys) = x :: ys
-putIn x k (y :: ys) = y :: (putIn x (k - 1) ys)
 
 findFree : List (Maybe Int) -> Maybe Int
 findFree [] = nothing
@@ -169,7 +161,7 @@ printList l = map pMI l; print "\n"
 
 onAsyncBody : {Ref (List (Maybe Int)) -> {[InProm] String} -> Int -> [WebThreads] Unit}
 onAsyncBody active p callId =
-    print "on Async running\n";
+    -- print "on Async running\n";
     let newWorker = findFree (read active) in
     case (newWorker)
         { nothing -> print "Sorry, we're full!\n"
@@ -188,9 +180,9 @@ onAsync _ _ = nothing
 
 onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebThreads] Unit}
 onResultBody active res wid =
-    print "OnResult "; print res; print " "; ouint wid; print "\n";
+    -- print "OnResult "; print res; print " "; ouint wid; print "\n";
     let cid = nth wid (read active) in
-    printList (read active);
+    -- printList (read active);
     case cid
         { nothing -> print "Got result back from incorrect worker\n"
         | (just k) -> write active (putIn nothing wid (read active));

@@ -90,6 +90,15 @@ reverse' (x :: xs) ys = reverse' xs (x :: ys)
 
 reverse : {List X -> List X}
 reverse xs = reverse' xs []
+
+mplus : Int -> Maybe Int -> Maybe Int
+mplus _ nothing = nothing
+mplus x (just y) = just (x + y)
+
+putIn : X -> Int -> List X -> List X
+putIn _ _ [] = []
+putIn x 0 (_ :: ys) = x :: ys
+putIn x k (y :: ys) = y :: (putIn x (k - 1) ys)
 --- end of standard stuff ---
 
 mul : Int -> Int -> Int
