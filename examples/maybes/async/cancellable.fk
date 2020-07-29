@@ -47,9 +47,9 @@ interface Promise [E] =
 -- Effects can be performed in the guard, just NO promises.
 data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
-data Sig = call {[InProm] String} Int | result String Int | cancel Int
+data Sig = call {[InTask] String} Int | result String Int | cancel Int
          -- For workers
-         | workIn {[InProm] String} Int | workOut String Int | workCancel Int
+         | workIn {[InTask] String} Int | workOut String Int | workCancel Int
 
 printSig : Sig -> [Console] Unit
 printSig (call _ x) = print "Call "; ouint x
@@ -78,6 +78,7 @@ interface LCancel = lCancel : Unit
 
 -- Alias for all of the necessary threads
 interface InProm = [Web, Console, LCancel]
+interface InTask = [InProm, Yield]
 interface WTNP = [Web, Console, RefState, Yield, LCancel]
 interface WebThreads = [Promise[InProm], WTNP]
 
@@ -91,12 +92,12 @@ canceller wid (workCancel wid') =
         { nothing }
 canceller _ _ = nothing
 
-workBody : {{[InProm] String} -> Int -> [WebThreads] Unit}
+workBody : {{[InTask] String} -> Int -> [WebThreads] Unit}
 workBody p wid =
     promise (prom {s -> canceller wid s});
     yield!;
     -- Perform the comp
-    let res = <Promise, RefState, Yield> p! in
+    let res = <Promise, RefState> p! in
     -- Send the result
     signal (workOut res wid);
     -- Reinstall worker
@@ -139,7 +140,7 @@ lookupCall x ((just y) :: ys) = if (x == y) { just 0 } { mplus 1 (lookupCall x y
 -- printList : List (Maybe Int) -> [Console] Unit
 -- printList l = map pMI l; print "\n"
 
-onAsyncBody : {Ref (List (Maybe Int)) -> {[InProm] String} -> Int -> [WebThreads] Unit}
+onAsyncBody : {Ref (List (Maybe Int)) -> {[InTask] String} -> Int -> [WebThreads] Unit}
 onAsyncBody active p callId =
     -- print "on Async running\n";
     let newWorker = findFree (read active) in
@@ -211,9 +212,9 @@ controller! =
 -- -------------
 -- -- Caller
 
--- -- This is the remote web request
--- remoteRequest : {String -> [Web]String}
--- remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
+-- This is the remote web request
+remoteRequest : {String -> [Web]String}
+remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
 
 -- -- Doesn't fire if the callnumber doesn't match.
 resultWaiter : {Int -> [WebThreads] Pid String [WebThreads]}
@@ -223,7 +224,7 @@ resultWaiter callNo =
 
 -- Caller takes a process and a callID
 -- it sends a signal to run the process, then installs a promise to wait the result.
-async : {[InProm] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
+async : {[InTask] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
 async proc callCounter =
     -- print "Asyncing!\n";
     let callNo = read callCounter in
@@ -236,11 +237,27 @@ async proc callCounter =
     -- and return the waiter.
     waiter
 
+-- Observe that we can cancel tasks halfway through processing, too
+callerWeb : {[WebThreads] Unit}
+callerWeb! =
+    let callCounter = new 0 in
+    let p1 = async {let ans = remoteRequest "10" in
+                    print "Halfway; 10*10 = "; print ans; print "\n";
+                    yield!;
+                    let ans2 = remoteRequest ans in
+                    print "Done! 10*10*10 = "; print ans2; print "\n";
+                    -- Return ans2
+                    ans2} callCounter in
+    yield!;
+    yield!;
+    signal (cancel 0);
+    print "Caller Finished\n"
+
+
 caller : {[WebThreads] Unit}
 caller! =
     let callCounter = new 0 in
     let p1 = async {print "*- Hey 1!\n"; "bye 1!\n"} callCounter in
-    yield!;
     signal (cancel 0);
     -- print (await p1);
     let p2 = async {print "*- Hey 3!\n"; "bye !\n"} callCounter in
@@ -368,7 +385,7 @@ thr1 thrs = {sayCancel (hdl 2 thrs (controller!; unit))}
 
 thr2 : {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}
 -- thr2 thrs = {hdl 4 thrs (caller!)}
-thr2 thrs = {sayCancel (hdl 3 thrs (caller!))}
+thr2 thrs = {sayCancel (hdl 3 thrs (callerWeb!))}
 
 -- -- All of these RefState adaptors are necessary, unfortunately.
 makeThreads : {[RefState] Ref (Threads [Console, Web])}
