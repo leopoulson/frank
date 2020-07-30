@@ -151,7 +151,7 @@ compute g (SApp f as amb)    ls   =
      -- allowed to yield. `amb` is the ambient ability at that application.
      if (cOverT && ("Yield" `elem` amb))
        then do subtractThresh;
-               trace "*** Inserting!\n" $ compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+               compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do incrCount;
                compute g f (Fun g as : ls)
 

@@ -1,4 +1,4 @@
---! YT=4000
+--! YT=400
 
 include std
 
@@ -44,9 +44,9 @@ nextId cur xs =
 interface Promise [E] =
           promise R : Prom R [E|] -> Pid R [E | Promise[E|], RefState, Yield]
         | signal : Sig -> Unit
-        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
+        | await R : Pid R [E | Promise[E|], RefState, Yield] -> R
 
--- Effects can be performed in the guard, just NO promises.
+
 data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
 data Sig = call {[InTask] String} Int | result String Int | cancel Int
@@ -123,8 +123,8 @@ workProm _ _ = nothing
 worker : {Int -> [WebThreads] Pid Unit [WebThreads]}
 worker wid = promise (prom {s -> workProm wid s})
 
--- -------------
--- -- Controller
+-------------
+-- Controller
 
 
 findFree : List (Maybe Int) -> Maybe Int
@@ -260,8 +260,8 @@ interleave procA procB callCounter =
     ileaveWaiter
 
 
--- -------------
--- -- Caller
+-------------
+-- Caller
 
 -- This is the remote web request
 remoteRequest : {String -> [Web]String}
@@ -292,67 +292,38 @@ sleepGranularity : {Int}
 sleepGranularity! = 1000
 
 sleepMany : {Int -> [Console, Yield] Unit}
-sleepMany x = sleep (sleepGranularity!);
-              sleepMany (x - sleepGranularity!)
+sleepMany x = if (x > 0) {sleep (sleepGranularity!);
+                          sleepMany (x - sleepGranularity!)}
+                         { unit }
 
 two_reqs : {[InTask] String}
 two_reqs! = let ans = remoteRequest "10" in
             print "10*10 = "; print ans; print "\n";
-            -- yield!;
-            sleepMany 500000;
-            let ans2 = remoteRequest ans in
-            print "10*10*10 = "; print ans2; print "\n";
-            -- yield!;
-            sleepMany 500000;
-            let ans3 = remoteRequest ans in
-            print "10*10*10*10 = "; print ans3; print "\n";
-            -- Return ans2
-            ans2
+            sleepMany 200000;
+            let ans = remoteRequest ans in
+            print "10*10*10 = "; print ans; print "\n";
+            sleepMany 200000;
+            let ans = remoteRequest ans in
+            print "10*10*10*10 = "; print ans; print "\n";
+            sleepMany 200000;
+            let ans = remoteRequest ans in
+            print "10*10*10*10 = "; print ans; print "\n";
+            ans
 
 sleep_yield : {[InTask] String}
-sleep_yield! = sleep 1000; print "Done sleeping!\n";
-               --yield!;
-               -- sleep 1000; print "Done sleeping!\n";
-               "ok"
+sleep_yield! = sleepMany 300000; print "Done sleeping!\n";
+               "ok\n"
 
 callerInterleaved : {[WebThreads] Unit}
 callerInterleaved! =
     let callCounter = new 0 in
     let il = interleave two_reqs sleep_yield callCounter in
-    -- let il = interleave sleep_yield two_reqs callCounter in
-    -- yield!;
-    -- yield!;
-    await (il);
+    print (await il);
     print "Caller finished\n"
-
--- Observe that we can cancel tasks halfway through processing, too
-callerWeb : {[WebThreads] Unit}
-callerWeb! =
-    let callCounter = new 0 in
-    let p1 = async two_reqs callCounter in
-    yield!;
-    yield!;
-    signal (cancel 0);
-    print "Caller Finished\n"
-
-
-caller : {[WebThreads] Unit}
-caller! =
-    let callCounter = new 0 in
-    let p1 = async {print "*- Hey 1!\n"; "bye 1!\n"} callCounter in
-    signal (cancel 0);
-    -- print (await p1);
-    let p2 = async {print "*- Hey 3!\n"; "bye !\n"} callCounter in
-    yield!;
-    -- print (await p2);
-    print "Caller Finished\n"
 
 ----------------------------
 -- Callback utilities
---
--- to_writeM2 : Pid R [E|RefState]
---           -> {S -> [K|] (Maybe {[E|RefState] R})}
---           -> {S -> [K|] (Maybe {[E|RefState] Unit})}
+
 to_writeM2 : Pid R [E|RefState]
           -> {S -> (Maybe {[E|RefState] R})}
           -> {S -> (Maybe {[E|RefState] Unit})}
@@ -369,19 +340,15 @@ to_writeM2 (pid cell) cb =
 ----- Handling Promises
 ----------------------------
 
-lookCancel : {<LCancel> Unit -> [LCancel, Console] Unit}
-lookCancel <lCancel -> k> = print "Seen it!"; lCancel!; <LCancel(s a -> s a a)> (k unit)
-lookCancel unit = unit
-
 stopCancel : {<LCancel> Unit -> [Console] Unit}
 stopCancel <lCancel -> k> = print "***** Stopping cancel\n"
 stopCancel unit = unit
 
-cbPerhaps : {Int -> Sig -> Ref (Threads [Console, Web])
-          -> {Sig -> (Maybe {[Promise[Console, Web, LCancel], Console, Web, LCancel, RefState, Yield]Unit})}
-          -> {[Console, Web, RefState, Yield] Unit}
-          -> Maybe {[Console, Web, RefState, Yield] Unit}}
-cbPerhaps thId sig thrs cbMod rest =
+convertStop : {Int -> Sig -> Ref (Threads [Console, Web])
+           -> {Sig -> (Maybe {[WebThreads]Unit})}
+           -> {[Console, Web, RefState, Yield] Unit}
+           -> Maybe {[Console, Web, RefState, Yield] Unit}}
+convertStop thId sig thrs cbMod rest =
     case (cbMod sig)
         { nothing -> nothing
         | (just susp) -> just { stopCancel (hdl thId thrs susp!; <LCancel> rest!) }}
@@ -399,7 +366,7 @@ hdl thId thrs <promise (prom cb) -> k> =
     -- Process callback to convert to general form
     let cbMod = <Console, RefState, Web, Yield, LCancel> (to_writeM2 cell cb) in
 
-    let cbM = {sig rest -> (cbPerhaps thId sig thrs cbMod rest)} in
+    let cbM = {sig rest -> (convertStop thId sig thrs cbMod rest)} in
 
     let readthrs = read thrs in
     let queued = <Console, RefState, Web, Yield, LCancel>(addCb thId cbM (readthrs)) in
