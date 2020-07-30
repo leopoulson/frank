@@ -100,6 +100,10 @@ subtractThresh :: Count ()
 subtractThresh = do (c, t) <- get
                     put (c - yield_thresh, t)
 
+resetCount :: Count ()
+resetCount = do (c, t) <- get
+                put (0, t)
+
 counterOverThresh :: Count Bool
 -- counterOverThresh = do (c, t) <- get
 --                        c >= t
@@ -150,7 +154,8 @@ compute g (SApp f as amb)    ls   =
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield. `amb` is the ambient ability at that application.
      if (cOverT && ("Yield" `elem` amb))
-       then do subtractThresh;
+       then do --subtractThresh;
+               resetCount;
                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do incrCount;
                compute g f (Fun g as : ls)

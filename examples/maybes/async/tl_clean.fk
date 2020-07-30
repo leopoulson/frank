@@ -74,7 +74,7 @@ runThread sig (trio susp cbs skipped) =
 ---- Shallow handling;
 -- I.e, only execute ONE promise on each thread.
 runThreadsShallow : {Sig -> Threads [E|] ->  Threads [E|]}
-runThreadsShallow _ (tnil) = tnil
+runThreadsShallow _ tnil = tnil
 runThreadsShallow sig (tentry k susp cbs rest) =
     -- Run the given thread w/ the incoming signal.
     let pUp = (runThreadShallow sig (trio susp cbs (tq []))) in

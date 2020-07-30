@@ -1,4 +1,4 @@
---! YT=4000
+--! YT=1000
 
 include std
 
@@ -13,7 +13,6 @@ include tl_clean
 scheduleT : {<Yield> Unit -> Int -> Ref (Threads [E| Console]) -> [E| Console, RefState]Unit}
 scheduleT <yield -> k> cur thrs =
     -- Find which thread id is the next one to be ran.
-    -- let readthrs = read thrs in
     let next = (nextId cur (keys (read thrs))) in
 
     -- Look up this new thunk.
@@ -84,22 +83,22 @@ interface Cancel = cancel : Unit
 interface InProm = [Web, Console, Cancel]
 interface InTask = [InProm, Yield]
 interface WTNP = [Web, Console, RefState, Yield, Cancel]
-interface WebThreads = [Promise[InProm], WTNP]
+interface WebEffs = [Promise[InProm], WTNP]
 
--- ------------
--- -- Worker
+------------
+-- Worker
 
-canceller : {Int -> Sig ->  Maybe {[WebThreads] Unit}}
+canceller : {Int -> Sig -> Maybe {[WebEffs] Unit}}
 canceller wid (workCancel wid') =
     if (wid == wid')
         { just {cancel!} }
         { nothing }
 canceller _ _ = nothing
 
-workBody : {{[InTask] String} -> Int -> [WebThreads] Unit}
+workBody : {{[InTask] String} -> Int -> [WebEffs] Unit}
 workBody p wid =
+    -- Install the canceller
     promise (prom {s -> canceller wid s});
-    -- yield!;
     -- Perform the comp
     let res = <Promise, RefState> p! in
     -- Send the result
@@ -108,7 +107,7 @@ workBody p wid =
     worker wid;
     unit
 
-workProm : {Int -> Sig -> Maybe {[WebThreads] Unit}}
+workProm : {Int -> Sig -> Maybe {[WebEffs] Unit}}
 workProm wid (workIn p wid') =
     if (wid == wid')
         { just {workBody p wid'} }
@@ -120,65 +119,48 @@ workProm _ _ = nothing
 -- * Runs the supplied process
 -- * Sends the result
 -- * Reinstalls itself.
-worker : {Int -> [WebThreads] Pid Unit [WebThreads]}
+worker : {Int -> [WebEffs] Pid Unit [WebEffs]}
 worker wid = promise (prom {s -> workProm wid s})
 
 -------------
 -- Controller
 
-
-findFree : List (Maybe Int) -> Maybe Int
-findFree [] = nothing
-findFree (nothing :: xs) = just 0 --mplus 1 (findFree xs)
-findFree ((just _) :: xs) = mplus 1 (findFree xs)
-
-lookupCall : Int -> List (Maybe Int) -> Maybe Int
-lookupCall _ [] = nothing
-lookupCall x (nothing :: ys) = mplus 1 (lookupCall x ys)
-lookupCall x ((just y) :: ys) = if (x == y) { just 0 } { mplus 1 (lookupCall x ys) }
-
--- pMI : Maybe Int -> [Console] Unit
--- pMI nothing = print "N "
--- pMI (just k) = print "J("; ouint k; print ") "
-
--- printList : List (Maybe Int) -> [Console] Unit
--- printList l = map pMI l; print "\n"
-
-onAsyncBody : {Ref (List (Maybe Int)) -> {[InTask] String} -> Int -> [WebThreads] Unit}
+onAsyncBody : {Ref (List (Maybe Int)) -> {[InTask] String} -> Int -> [WebEffs] Unit}
 onAsyncBody active p callId =
-    -- print "on Async running\n";
-    let newWorker = findFree (read active) in
-    case (newWorker)
+    case (findFree (read active))
         { nothing -> print "Sorry, we're full!\n"
         | (just wid) ->
-            -- print "Putting on "; ouint wid; print "\n";
             -- Update to say that workerId wid is active
             write active (putIn (just callId) wid (read active));
             signal (workIn p wid)};
     promise (prom {s -> onAsync active s});
     unit
 
-onAsync : {Ref (List (Maybe Int)) -> Sig ->  Maybe {[WebThreads] Unit}}
+onAsync : {Ref (List (Maybe Int)) -> Sig ->  Maybe {[WebEffs] Unit}}
 onAsync active (call p callId) =
     just {onAsyncBody active p callId}
 onAsync _ _ = nothing
 
-onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebThreads] Unit}
+-- When a result comes in we lookup the call id that the worker was running.
+-- Then we signal to the caller that the result is back, and update the active
+-- list.
+onResultBody : {Ref (List (Maybe Int)) -> String -> Int -> [WebEffs] Unit}
 onResultBody active res wid =
-    let cid = nth wid (read active) in
-    case cid
+    case (nth wid (read active))
         { nothing -> print "Got result back from incorrect worker\n"
         | (just k) -> write active (putIn nothing wid (read active));
                       signal (result res k)};
     promise (prom {s -> onResult active s});
     unit
 
-onResult : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onResult : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebEffs] Unit}}
 onResult active (workOut res wid) =
     just { onResultBody active res wid }
 onResult _ _ = nothing
 
-onCancelBody : {Ref (List (Maybe Int)) -> Int -> [WebThreads] Unit}
+-- Body of onCancel will lookup the worker executing the call, tell it to stop,
+-- and then update the active list.
+onCancelBody : {Ref (List (Maybe Int)) -> Int -> [WebEffs] Unit}
 onCancelBody active callId =
     case (lookupCall callId (read active))
          { nothing -> print "Cancelling a finished task\n"
@@ -189,26 +171,20 @@ onCancelBody active callId =
     promise (prom {s -> onCancel active s});
     unit
 
-onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
+onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebEffs] Unit}}
 onCancel active (cancelCall callId) =
     just {onCancelBody active callId}
 onCancel _ _ = nothing
 
 -- Controller will take procs and issue them on to workers.
 -- Keeps a list of which workers are busy.
-controller : {[WebThreads] Unit}
+controller : {[WebEffs] Unit}
 controller! =
    let active = new [nothing, nothing, nothing, nothing, nothing] in
    promise (prom {s -> onAsync active s});
    promise (prom {s -> onAsync active s});
-   promise (prom {s -> onAsync active s});
-   promise (prom {s -> onAsync active s});
    promise (prom {s -> onCancel active s});
    promise (prom {s -> onCancel active s});
-   promise (prom {s -> onCancel active s});
-   promise (prom {s -> onCancel active s});
-   promise (prom {s -> onResult active s});
-   promise (prom {s -> onResult active s});
    promise (prom {s -> onResult active s});
    promise (prom {s -> onResult active s});
    unit
@@ -217,15 +193,11 @@ controller! =
 -- Interleaving
 
 
-cbBody : {String -> Int -> [WebThreads] String}
+cbBody : {String -> Int -> [WebEffs] String}
 cbBody res callB = signal (cancelCall callB); yield!; res
 
-lrWaiterBody : {String -> Int -> Int -> Int -> Maybe {[WebThreads] String}}
+lrWaiterBody : {String -> Int -> Int -> Int -> Maybe {[WebEffs] String}}
 lrWaiterBody res callNo callA callB =
-    -- case callNo
-    -- { callA -> just {cbBody res callB}
-    -- | callB -> just {cbBody res callA}
-    -- | _ -> nothing}
     if (callNo == callA)
         { just { cbBody res callB } }
         -- Then check if it's B
@@ -233,7 +205,7 @@ lrWaiterBody res callNo callA callB =
             { just { cbBody res callA} }
             { nothing }}
 
-leaveResWaiter : {Int -> Int -> [WebThreads] Pid String [WebThreads]}
+leaveResWaiter : {Int -> Int -> [WebEffs] Pid String [WebEffs]}
 leaveResWaiter callA callB =
     promise (prom
         {(result res callNo) -> lrWaiterBody res callNo callA callB
@@ -241,7 +213,7 @@ leaveResWaiter callA callB =
 
 -- Runs the two given tasks; once one of them finishes, stops the other one.
 interleave : {{[InTask] String} -> {[InTask] String}
-          -> Ref Int -> [WebThreads] Pid String [WebThreads]}
+          -> Ref Int -> [WebEffs] Pid String [WebEffs]}
 interleave procA procB callCounter =
     -- Issue the two calls with signals.
     let callNoA = read callCounter in
@@ -268,14 +240,14 @@ remoteRequest : {String -> [Web]String}
 remoteRequest arg = getRequest (concat "http://api.mathjs.org/v4/?expr=10*" arg)
 
 -- -- Doesn't fire if the callnumber doesn't match.
-resultWaiter : {Int -> [WebThreads] Pid String [WebThreads]}
+resultWaiter : {Int -> [WebEffs] Pid String [WebEffs]}
 resultWaiter callNo =
     promise (prom {(result res callNo') -> if (callNo == callNo') { just {res} } {nothing}
                                    |  _ -> nothing})
 
 -- Caller takes a process and a callID
 -- it sends a signal to run the process, then installs a promise to wait the result.
-async : {[InTask] String} -> Ref Int -> [WebThreads] Pid String [WebThreads]
+async : {[InTask] String} -> Ref Int -> [WebEffs] Pid String [WebEffs]
 async proc callCounter =
     -- print "Asyncing!\n";
     let callNo = read callCounter in
@@ -314,7 +286,7 @@ sleep_yield : {[InTask] String}
 sleep_yield! = sleepMany 300000; print "Done sleeping!\n";
                "ok\n"
 
-callerInterleaved : {[WebThreads] Unit}
+callerInterleaved : {[WebEffs] Unit}
 callerInterleaved! =
     let callCounter = new 0 in
     let il = interleave two_reqs sleep_yield callCounter in
@@ -324,10 +296,10 @@ callerInterleaved! =
 ----------------------------
 -- Callback utilities
 
-to_writeM2 : Pid R [E|RefState]
-          -> {S -> (Maybe {[E|RefState] R})}
-          -> {S -> (Maybe {[E|RefState] Unit})}
-to_writeM2 (pid cell) cb =
+toWrite : Pid R [E|RefState]
+       -> {S -> (Maybe {[E|RefState] R})}
+       -> {S -> (Maybe {[E|RefState] Unit})}
+toWrite (pid cell) cb =
     {x -> case (cb x)
          { nothing -> nothing
          | (just susp) ->
@@ -341,12 +313,12 @@ to_writeM2 (pid cell) cb =
 ----------------------------
 
 stopCancel : {<Cancel> Unit -> [Console] Unit}
-stopCancel <cancel -> k> = print "***** Stopping cancelCall\n"
+stopCancel <cancel -> k> = print "***** Stopping cancel\n"
 stopCancel unit = unit
 
 convertStop : {Int -> Sig -> Ref (Threads [Console, Web])
-           -> {Sig -> (Maybe {[WebThreads]Unit})}
-           -> {[Console, Web, RefState, Yield] Unit}
+           -> {Sig -> (Maybe {[WebEffs]Unit})}        -- the callback to be installed
+           -> {[Console, Web, RefState, Yield] Unit}  -- the thunked rest of computatio
            -> Maybe {[Console, Web, RefState, Yield] Unit}}
 convertStop thId sig thrs cbMod rest =
     case (cbMod sig)
@@ -364,7 +336,7 @@ hdl thId thrs <promise (prom cb) -> k> =
     -- Create new pid cell
     let cell = pid (new waiting) in
     -- Process callback to convert to general form
-    let cbMod = <Console, RefState, Web, Yield, Cancel> (to_writeM2 cell cb) in
+    let cbMod = <Console, RefState, Web, Yield, Cancel> (toWrite cell cb) in
 
     let cbM = {sig rest -> (convertStop thId sig thrs cbMod rest)} in
 

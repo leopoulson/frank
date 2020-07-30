@@ -99,6 +99,16 @@ putIn : X -> Int -> List X -> List X
 putIn _ _ [] = []
 putIn x 0 (_ :: ys) = x :: ys
 putIn x k (y :: ys) = y :: (putIn x (k - 1) ys)
+
+findFree : List (Maybe Int) -> Maybe Int
+findFree [] = nothing
+findFree (nothing :: xs) = just 0 --mplus 1 (findFree xs)
+findFree ((just _) :: xs) = mplus 1 (findFree xs)
+
+lookupCall : Int -> List (Maybe Int) -> Maybe Int
+lookupCall _ [] = nothing
+lookupCall x (nothing :: ys) = mplus 1 (lookupCall x ys)
+lookupCall x ((just y) :: ys) = if (x == y) { just 0 } { mplus 1 (lookupCall x ys) }
 --- end of standard stuff ---
 
 mul : Int -> Int -> Int
