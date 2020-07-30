@@ -41,10 +41,14 @@ nextId cur xs =
 ----------------------------
 -- Promise structures.
 
+-- interface Promise  =
+--           promise R : Prom R [Promise, Console, RefState, Yield] -> Pid R [Promise, Console, RefState, Yield]
+--         | signal : Sig -> Unit
+--         | await R : Pid R [Promise, Console, RefState, Yield]-> R
 interface Promise [E] =
           promise R : Prom R [E | Promise[E|], RefState, Yield] -> Pid R [E | Promise[E|], RefState, Yield]
         | signal : Sig -> Unit
-        | await R : Pid R [E | Promise[E|], RefState, Yield] -> R
+        | await R : Pid R [E | Promise[E|], RefState, Yield]-> R
 
 -- Any effects will be performed in the returned comp.
 -- Any guard conditions should NOT have effects in.
