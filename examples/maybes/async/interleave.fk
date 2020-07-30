@@ -1,4 +1,4 @@
---! YT=400
+--! YT=4000
 
 include std
 
@@ -49,14 +49,14 @@ interface Promise [E] =
 
 data Prom R [E] = prom {Sig -> (Maybe {[E| Promise[E|], RefState, Yield]R})}
 
-data Sig = call {[InTask] String} Int | result String Int | cancel Int
+data Sig = call {[InTask] String} Int | result String Int | cancelCall Int
          -- For workers
          | workIn {[InTask] String} Int | workOut String Int | workCancel Int
 
 printSig : Sig -> [Console] Unit
 printSig (call _ x) = print "Call "; ouint x
 printSig (result st x) = print "Result "; print st; print " "; ouint x
-printSig (cancel x) = print "Cancel "; ouint x
+printSig (cancelCall x) = print "CancelCall "; ouint x
 printSig (workIn _ x) = print "WorkIn "; ouint x
 printSig (workOut st x) = print "WorkOut "; print st; print " "; ouint x
 printSig (workCancel x) = print "WorkCancel "; ouint x
@@ -78,12 +78,12 @@ writePid (pid cell) x = write cell x
 ----------------------------
 -- Threads
 
-interface LCancel = lCancel : Unit
+interface Cancel = cancel : Unit
 
 -- Alias for all of the necessary threads
-interface InProm = [Web, Console, LCancel]
+interface InProm = [Web, Console, Cancel]
 interface InTask = [InProm, Yield]
-interface WTNP = [Web, Console, RefState, Yield, LCancel]
+interface WTNP = [Web, Console, RefState, Yield, Cancel]
 interface WebThreads = [Promise[InProm], WTNP]
 
 -- ------------
@@ -92,7 +92,7 @@ interface WebThreads = [Promise[InProm], WTNP]
 canceller : {Int -> Sig ->  Maybe {[WebThreads] Unit}}
 canceller wid (workCancel wid') =
     if (wid == wid')
-        { just {lCancel!} }
+        { just {cancel!} }
         { nothing }
 canceller _ _ = nothing
 
@@ -190,7 +190,7 @@ onCancelBody active callId =
     unit
 
 onCancel : {Ref (List (Maybe Int)) -> Sig -> Maybe {[WebThreads] Unit}}
-onCancel active (cancel callId) =
+onCancel active (cancelCall callId) =
     just {onCancelBody active callId}
 onCancel _ _ = nothing
 
@@ -218,7 +218,7 @@ controller! =
 
 
 cbBody : {String -> Int -> [WebThreads] String}
-cbBody res callB = signal (cancel callB); yield!; res
+cbBody res callB = signal (cancelCall callB); yield!; res
 
 lrWaiterBody : {String -> Int -> Int -> Int -> Maybe {[WebThreads] String}}
 lrWaiterBody res callNo callA callB =
@@ -307,7 +307,7 @@ two_reqs! = let ans = remoteRequest "10" in
             print "10*10*10*10 = "; print ans; print "\n";
             sleepMany 200000;
             let ans = remoteRequest ans in
-            print "10*10*10*10 = "; print ans; print "\n";
+            print "10*10*10*10*10 = "; print ans; print "\n";
             ans
 
 sleep_yield : {[InTask] String}
@@ -340,8 +340,8 @@ to_writeM2 (pid cell) cb =
 ----- Handling Promises
 ----------------------------
 
-stopCancel : {<LCancel> Unit -> [Console] Unit}
-stopCancel <lCancel -> k> = print "***** Stopping cancel\n"
+stopCancel : {<Cancel> Unit -> [Console] Unit}
+stopCancel <cancel -> k> = print "***** Stopping cancelCall\n"
 stopCancel unit = unit
 
 convertStop : {Int -> Sig -> Ref (Threads [Console, Web])
@@ -351,25 +351,25 @@ convertStop : {Int -> Sig -> Ref (Threads [Console, Web])
 convertStop thId sig thrs cbMod rest =
     case (cbMod sig)
         { nothing -> nothing
-        | (just susp) -> just { stopCancel (hdl thId thrs susp!; <LCancel> rest!) }}
+        | (just susp) -> just { stopCancel (hdl thId thrs susp!; <Cancel> rest!) }}
 
---- TODO: Maybe change the types so that LCancel can't leak out?
+--- TODO: Maybe change the types so that Cancel can't leak out?
 -- This isn't possible I don't think.
--- hdl : {Int -> Ref (Threads [Console, Web, LCancel])
+-- hdl : {Int -> Ref (Threads [Console, Web, Cancel])
 hdl : {Int -> Ref (Threads [Console, Web])
-    -> <Promise[Console, Web, LCancel]> Unit
-    -> [Console, Web, RefState, Yield, LCancel] Unit}
+    -> <Promise[Console, Web, Cancel]> Unit
+    -> [Console, Web, RefState, Yield, Cancel] Unit}
 
 hdl thId thrs <promise (prom cb) -> k> =
     -- Create new pid cell
     let cell = pid (new waiting) in
     -- Process callback to convert to general form
-    let cbMod = <Console, RefState, Web, Yield, LCancel> (to_writeM2 cell cb) in
+    let cbMod = <Console, RefState, Web, Yield, Cancel> (to_writeM2 cell cb) in
 
     let cbM = {sig rest -> (convertStop thId sig thrs cbMod rest)} in
 
     let readthrs = read thrs in
-    let queued = <Console, RefState, Web, Yield, LCancel>(addCb thId cbM (readthrs)) in
+    let queued = <Console, RefState, Web, Yield, Cancel>(addCb thId cbM (readthrs)) in
 
     -- Write the resumption to the cell and resume.
     write thrs queued;
@@ -379,7 +379,7 @@ hdl thId thrs <promise (prom cb) -> k> =
 hdl thId thrs <signal sig -> thr> =
     -- print "\nSignal in "; <RefState, Web, Yield, LCancel> (printSig sig); print "\n";
     let readthrs = read thrs in
-    let newThrs = <Console, RefState, Web, Yield, LCancel>(runThreadsShallow sig (readthrs)) in
+    let newThrs = <Console, RefState, Web, Yield, Cancel>(runThreadsShallow sig (readthrs)) in
 
     write thrs newThrs;
     hdl thId thrs (thr unit)
@@ -401,8 +401,8 @@ hdl thId thrs unit = unit
 interface CRWY = [Console, RefState, Web, Yield]
 interface CW = [Console, Web]
 
-sayCancel : {<LCancel> Unit -> [Console] Unit}
-sayCancel <lCancel -> _> = print "top level cancel"; unit
+sayCancel : {<Cancel> Unit -> [Console] Unit}
+sayCancel <cancel -> _> = print "top level cancelCall"; unit
 sayCancel unit = unit
 
 fromList : {List {Ref (Threads [Console, Web]) -> {[CRWY] Unit}}

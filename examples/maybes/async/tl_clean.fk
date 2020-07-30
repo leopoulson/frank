@@ -24,13 +24,6 @@ keys : {Threads [E|] -> [E| RefState]List Int}
 keys tnil = []
 keys (tentry k _ _ rest) = k :: keys rest
 
-keysE : {Threads [_|] -> List Int}
-keysE tnil = []
-keysE (tentry k _ _ rest) = k :: keysE rest
-
-keysL : {Threads [E| LCancel, Console] -> [E| Console, RefState]List Int}
-keysL tnil = []
-keysL (tentry k _ _ rest) = k :: keysL rest
 
 -- Adds a callback cb for thread id k
 addCb : {Int -> {Sig -> {[E| RefState, Yield] Unit} ->  Maybe {[E| RefState, Yield] Unit}} -> Threads [E|] ->  Threads [E|]}
@@ -55,13 +48,6 @@ lookupThk k (tentry k' thk _ rest) =
       { just thk }
       { lookupThk k rest }
 
-lookupThkL : {Int -> Threads [E|LCancel, Console] -> [E|Console, RefState] Maybe {[E| Console, RefState, Yield, LCancel] Unit}}
-lookupThkL k tnil = nothing
-lookupThkL k (tentry k' thk _ rest) =
-    if (k == k')
-      { just thk }
-      { lookupThkL k rest }
-
 runThreads : {Sig -> Threads [E|] ->  Threads [E|]}
 runThreads _ (tnil) = tnil
 runThreads sig (tentry k susp cbs rest) =
@@ -85,13 +71,8 @@ runThread sig (trio susp cbs skipped) =
                                      | (just susp2) -> runThread sig (trio susp2 cbs skipped) }}
 
 
-
-
 ---- Shallow handling;
 -- I.e, only execute ONE promise on each thread.
-
-
-
 runThreadsShallow : {Sig -> Threads [E|] ->  Threads [E|]}
 runThreadsShallow _ (tnil) = tnil
 runThreadsShallow sig (tentry k susp cbs rest) =
