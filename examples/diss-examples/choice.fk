@@ -1,0 +1,13 @@
+include std
+
+interface Choose X = choose : {[Choose X]X} -> {[Choose X]X} -> X
+
+pch : {[Choose Unit [Console]] Unit}
+pch! = choose {print "Hey!"} {print "Hello"}
+
+pickLeft : {<Choose Unit [E|]> Unit -> [E|] Unit}
+pickLeft <choose l r -> k> = pickLeft (k l!)
+pickLeft x = x
+
+main : {[Console] Unit}
+main! = pickLeft (<Console> pch!)

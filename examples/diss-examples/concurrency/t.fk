@@ -1,0 +1,24 @@
+include std
+
+interface Yield = yield : Unit
+
+interface Es = [Console, Yield, Web]
+
+emm : [Es] Int
+emm! = print "T"; 3
+
+do_m : Unit -> [Es] Int
+do_m _ = emm!
+
+top : [Es] Int
+top! = do_m yielding!
+
+yielding : [Es] Unit
+yielding! = yield!
+
+hdlYield : <Yield> X -> [Console] X
+hdlYield <yield -> k> = hdlYield (k unit)
+hdlYield x = x
+
+main : [Console, Web] Unit
+main! = hdlYield top; unit
