@@ -303,17 +303,18 @@ command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- s
 tryRules :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> Count Comp
 
 -- If any of the comps are yields;
--- tryRules f g [] cs ls = if (any isYield cs)
---   -- Make arguments for the passed-in function, which is the one being
---   -- performed, and reinvoke it. This expression doesn't need to be able to
---   -- yield, so can just explicitly pass in False.
---   then let (gUpdated, expargs) = makeArgs g cs in
---        compute gUpdated (SApp f expargs []) ls
---   -- if not, abort as before.
---   else command "abort" [] [] 0 ls
---   where
---     isYield (Call "yield" _ _ _) = True
---     isYield _ = False
+tryRules f g [] cs ls = if (any isYield cs)
+  -- Make arguments for the passed-in function, which is the one being
+  -- performed, and reinvoke it. This expression doesn't need to be able to
+  -- yield, so can just explicitly pass in False.
+  then let (gUpdated, expargs) = makeArgs g cs in
+       trace ("\n" ++ show f ++ "\n$$$\n" ++ show expargs) $
+         compute gUpdated (SApp f expargs []) ls
+  -- if not, abort as before.
+  else command "abort" [] [] 0 ls
+  where
+    isYield (Call "yield" _ _ _) = True
+    isYield _ = False
    
 tryRules f g ((ps, e) : pes) cs ls = case matches g ps cs of
   Just g  -> compute g e ls                                                 -- rule matches, compute
