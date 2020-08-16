@@ -2,16 +2,16 @@
 
 include std
 
--- sleepGranularity : {Int}
--- sleepGranularity! = 1000
-
--- sleepMany : {Int -> [Console, Yield] Unit}
--- sleepMany x = if (x > 0) {sleep (sleepGranularity!);
---                           sleepMany (x - sleepGranularity!)}
---                          { unit }
+sleepGranularity : {Int}
+sleepGranularity! = 1000
 
 sleepMany : {Int -> [Console, Yield] Unit}
-sleepMany x = sleep x; yield!
+sleepMany x = if (x > 0) {sleep (sleepGranularity!);
+                          sleepMany (x - sleepGranularity!)}
+                         { unit }
+
+-- sleepMany : {Int -> [Console, Yield] Unit}
+-- sleepMany x = sleep x; yield!
 
 thread : {String -> [Console, Yield] Unit}
 thread st = print st; sleepMany 200000; thread st

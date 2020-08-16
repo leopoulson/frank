@@ -84,30 +84,38 @@ type Agenda = [Frame]
 type SkippedAgenda = [Frame]
 -- [Frame]: Skipped frames (most recently skipped frame is on top)
 
-type CState = (Int, Int)
+-- First arg is the counter
+-- Second is the threshold
+type CState = (Counter, Int)
+
+data Counter = JC Int | YieldPlease
 
 -- Counts the number of function calls, so we can insert yields.
 type Count s = State CState s
 
+addToCounter :: Counter -> Int -> Int -> Counter
+addToCounter (JC x) incr thresh =
+  let sum = x + incr in
+  if (sum >= thresh) then YieldPlease else (JC sum)
+addToCounter YieldPlease _ _ = YieldPlease
+
 incrCount :: Count ()
 incrCount = do (c, t) <- get
-               put (c + 1, t)
+               put (addToCounter c 1 t, t)
 
-getCount :: Count Int
+getCount :: Count Counter
 getCount = fst <$> get
 
-subtractThresh :: Count ()
-subtractThresh = do (c, t) <- get
-                    put (c - yield_thresh, t)
+isCounterYield :: Counter -> Bool
+isCounterYield YieldPlease = True
+isCounterYield _ = False
 
 resetCount :: Count ()
 resetCount = do (c, t) <- get
-                put (0, t)
+                put (JC 0, t)
 
 counterOverThresh :: Count Bool
--- counterOverThresh = do (c, t) <- get
---                        c >= t
-counterOverThresh = (\(c, t) -> c >= t) <$> get
+counterOverThresh = (isCounterYield . fst) <$> get
 
 envToList :: Env -> [[Def Val]]
 envToList g = envToList' g []
@@ -135,6 +143,8 @@ fetch g y = go g where
 -- Most of them take an Env and maintain an agenda (frame stack,
 -- commands-to-be-skipped).
 
+-- NOT TRUE
+-- This is the default; can be set from the file.
 yield_thresh :: Int
 yield_thresh = 2000
 
@@ -150,12 +160,12 @@ compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save
 
 -- 2) Application. Compute function. Save args for later.
 compute g (SApp f as amb)    ls   =
+  -- trace (show f) $
   do cOverT <- counterOverThresh
      -- So now we only insert a yield if counter is over 200 and the term is
      -- allowed to yield. `amb` is the ambient ability at that application.
      if (cOverT && ("Yield" `elem` amb))
-       then do --subtractThresh;
-               resetCount;
+       then do resetCount;
                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do incrCount;
                compute g f (Fun g as : ls)
@@ -463,7 +473,7 @@ prog g ds = g' where
   g' = g :/ map ev ds
   ev (DF f hss pes) = DF f hss pes
   ev (x := e) = x := v where
-    Ret v = evalState (compute g' e []) (0, yield_thresh)
+    Ret v = evalState (compute g' e []) (JC 0, yield_thresh)
 
 load :: [Def Exp] -> Env
 load = prog envBuiltins
@@ -478,7 +488,7 @@ loadFile x = do
 
 -- Given env `g` and id `s`,
 try :: Int -> Env -> String -> (Comp, CState)
-try t g s = runState (compute g e []) (0, t) where
+try t g s = runState (compute g e []) (JC 0, t) where
   Just (e, "") = parse pExp s
 
 ------------------------
