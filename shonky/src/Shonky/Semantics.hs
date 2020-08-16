@@ -246,7 +246,7 @@ compute g (SApp f as amb)    ls   =
   do xxx <- getCounters
      r <- topYields
      if (r && ("Yield" `elem` amb))
-       then trace ("Yielding not EF!" ++ show xxx ++ "\n") $
+       then -- trace ("Yielding not EF!" ++ "\n") $
             do resetTop;
                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do incrCount;
@@ -355,28 +355,51 @@ printOpNice :: Val -> String
 printOpNice (VF _ ads pes) = "VF " ++ show ads ++ " " ++ show pes
 printOpNice _ = "Some other op"
 
+isScheduler :: Val -> Bool
+isScheduler (VF _ ads _) = hasYield ads
+isScheduler _ = False
 
 -- given: eval. operator `f`, eval. reversed arguments `cs`, env `g`,
 --        handleable commands, non-eval. args `es`, frame stack
 -- Compute until all [Exp] are [Comp], then call `apply`.
 args :: Val -> [Comp] -> Env -> [([Adap], [String])] -> [Exp] -> Agenda -> Count Comp
-args f cs _ _ [] ls = apply f (reverse cs) ls                      -- apply when all args are evaluated
+args f cs g hss [] ls = -- apply f (reverse cs) ls                      -- apply when all args are evaluated
+  -- trace ("Looking in args") $
+   if (isScheduler f)
+    -- First we remove the old arguments, as we know it's done, nothing left to count.
+    then trace "\n\nHas yield in args" $
+          do popTop;
+             -- Now we check if we're meant to yield
+             r <- topYields
+             -- Check the counters...
+             xxx <- getCounters
+             trace (show xxx) $
+              if (r)
+               -- If we are, we stop what we're doing and put a yield in front.
+               then trace "Scheduler is Yielding" $
+                 compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], []) f cs g hss [] : ls)
+                 -- compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], [[]]) f (reverse cs) g [] [] : ls)
+               else do newCounter;
+                       apply f (reverse cs) ls
+    else apply f (reverse cs) ls
+
 args f cs g [] es ls = args f cs g [([], [])] es ls                         -- default to [] (no handleable commands) if not explicit
 
 args f [] g h@(hs : hss) (e : es) ls =
   if (hasYield h)
-    then -- trace ("Adding counter at " ++ printOpNice f) $
-         do newCounter;
-            compute g e (Arg hs f [] g hss es : ls)
+    then -- trace (printOpNice f) $
+          do newCounter;
+             xxx <- getCounters
+             trace ("When adding: " ++ show xxx) $
+              compute g e (Arg hs f [] g hss es : ls)
     else
          compute g e (Arg hs f [] g hss es : ls)
-
 args f cs g (hs : hss) (e : es) ls =
   if (hasYieldArg hs)
-    then do resetTop;
+    then do -- resetTop;
             xxx <- getCounters
-            trace ("New arg cs = " ++ show xxx) $
-              compute g e (Arg hs f cs g hss es : ls)    -- compute argument, record rest. will return eventually here.
+            -- trace ("New arg cs = " ++ show xxx) $
+            compute g e (Arg hs f cs g hss es : ls)    -- compute argument, record rest. will return eventually here.
     else
               compute g e (Arg hs f cs g hss es : ls)    -- compute argument, record rest. will return eventually here.
   -- do xxx <- getCounters
@@ -427,8 +450,8 @@ apply :: Val -> [Comp] -> Agenda -> Count Comp
 -- Call tryRules with the function being applied now - in case all of the
 -- matches fail and we need to reinvoke w/ yield
 apply v@(VF g adps pes) cs ls =
-  if (hasYield adps)
-    then tryIntercept v cs ls
+  -- if (hasYield adps)
+    -- then tryIntercept v cs ls
     -- then trace ("\n\n*-- All eval, has yield; " ++ (concatMap pComp cs) ++ "\n\n") $
     --      do -- popTop;
     --         r <- topYields
@@ -442,7 +465,7 @@ apply v@(VF g adps pes) cs ls =
     --         -- xxx <- getCounters
     --         -- trace (show xxx) $
     --         --   tryRules (EF adps pes) g pes cs ls                             -- apply function to evaluated args `cs`
-    else
+    -- else
          tryRules (EF adps pes) g pes cs ls                             -- apply function to evaluated args `cs`
 apply (VB x g) cs ls = case M.lookup x builtins of                          -- apply built-in fct. to evaluated args `cs`
   Just f -> consume (f g cs) ls
@@ -689,6 +712,10 @@ ioHandler (Call "write" 0 [VR ref, v] ks, count) =
 ioHandler (Call "read" 0 [VR ref] ks, count) =
   do v <- readIORef ref
      ioHandler (flip runState count (consume v (reverse ks)))
+
+ioHandler (Call "yield" 0 [] ks, count) =
+  do putStrLn "***** YIELD LEAKING OUT! VERY BAD"
+     ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))
 
 -- ioHandler (Call "yield" 0 [] ks, count) = trace ("IO Handling Yield") $
 --      ioHandler (flip runState count (consume (VA "unit" :&& VA "") (reverse ks)))

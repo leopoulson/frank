@@ -42,6 +42,7 @@ schedj2Out unit unit = unit
 
 tower : {[Console] Unit}
 tower! = schedj2Out (schedj2In (thread "A ") (thread "B ")) (thread "C ")
+-- tower! = schedj2 (schedj2 (thread "A ") (thread "B ")) (thread "C ")
 
 main : {[Console] Unit}
 main! = tower!
