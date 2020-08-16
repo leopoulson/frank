@@ -185,8 +185,14 @@ consume v (Fun g as   : ls) = args v [] g (adapsAndHandles v) as (ls)
                              --                   current arg `v`
                              --        Non-eval.: last args `es`
                              -- Add `v` to `cs` and re-call `args`
-consume v (Arg _ f cs g
-               hss es : ls) = args f (Ret v : cs) g hss es (ls)
+consume v a@(Arg adps f cs g
+               hss es : ls) =
+  -- trace (--"Hdlr = " ++ show f ++ "\n" ++
+  --        "adps = " ++ show adps ++ "\n" ++
+  --        "1st args = " ++ show cs ++ "\n" ++
+  --        "cur arg = " ++ show v ++ "\n" ++
+  --        "last args = " ++ show es ++ "\n") $
+       args f (Ret v : cs) g hss es (ls)
 
   -- Sequence.    Given: eval. 1st _,   non-eval. 2nd `e`. Compute `e`.
 consume _ (Seq g e           : ls) = compute g e (ls)
@@ -246,9 +252,28 @@ adapsAndHandles _ = []
 args :: Val -> [Comp] -> Env -> [([Adap], [String])] -> [Exp] -> Agenda -> Count Comp
 args f cs g hss [] ls = apply f (reverse cs) ls                             -- apply when all args are evaluated
 args f cs g [] es ls = args f cs g [([], [])] es ls                         -- default to [] (no handleable commands) if not explicit
-args f cs g (hs : hss) (e : es) ls = compute g e
-                                             (Arg hs f cs g hss es : ls)    -- compute argument, record rest. will return eventually here.
+
+-- args f [] g (hs : hss) (e : es) ls =
+--   trace ("NO ARGS EVALUATED" ++ show (hs : hss)) $
+--   compute g e (Arg hs f [] g hss es : ls)
+
+args f [] g h@(hs : hss) (e : es) ls =
+  if (hasYield h)
+    then trace ("ADD COUNTER HERE? " ++ show h) $
+         compute g e (Arg hs f [] g hss es : ls)
+    else
+         compute g e (Arg hs f [] g hss es : ls)
+
+args f cs g (hs : hss) (e : es) ls =
+  compute g e (Arg hs f cs g hss es : ls)    -- compute argument, record rest. will return eventually here.
 -- TODO: LC: remove and fix the second case of args (it's a bit of a hack right now)
+
+hasYield :: [([Adap], [String])] -> Bool
+hasYield xs = any isAdapYield ((concat . map fst) xs)
+
+isAdapYield :: Adap -> Bool
+isAdapYield (strs, _) = any ((==) "yield") strs
+
 
 -- `apply` is called by `args` when all arguments are evaluated
 -- given: eval. operator, eval. args, frame stack
@@ -308,7 +333,7 @@ tryRules f g [] cs ls = if (any isYield cs)
   -- performed, and reinvoke it. This expression doesn't need to be able to
   -- yield, so can just explicitly pass in False.
   then let (gUpdated, expargs) = makeArgs g cs in
-       trace ("\n" ++ show f ++ "\n$$$\n" ++ show expargs) $
+       -- trace ("\n" ++ show f ++ "\n$$$\n" ++ show expargs) $
          compute gUpdated (SApp f expargs []) ls
   -- if not, abort as before.
   else command "abort" [] [] 0 ls

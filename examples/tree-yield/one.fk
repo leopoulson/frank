@@ -1,0 +1,38 @@
+--! YT=1000
+
+include std
+
+-- sleepGranularity : {Int}
+-- sleepGranularity! = 1000
+
+-- sleepMany : {Int -> [Console, Yield] Unit}
+-- sleepMany x = if (x > 0) {sleep (sleepGranularity!);
+--                           sleepMany (x - sleepGranularity!)}
+--                          { unit }
+
+sleepMany : {Int -> [Console, Yield] Unit}
+sleepMany x = sleep x; yield!
+
+thread : {String -> [Console, Yield] Unit}
+thread st = print st; sleepMany 200000; thread st
+
+pass : {X -> X}
+pass x = x
+
+whatever : {Unit -> Unit -> Unit}
+whatever x y = x; y
+
+schedj : {<Yield> Unit -> <Yield> Unit -> <Yield>Unit -> Unit}
+schedj unit unit unit = unit
+
+schedj2 : {<Yield> Unit -> <Yield> Unit -> Unit}
+schedj2 unit unit = unit
+
+tower : {[Console] Unit}
+tower! = schedj2 (thread "A ") (schedj2 (thread "B ") (thread "C "))
+
+main : {[Console] Unit}
+main! = tower!
+-- main! = schedj (pass (thread "A ")) (pass (thread "B ")) unit
+-- main! = schedj unit unit unit
+-- main! = schedj2 (whatever (thread "A ") (thread "B ")) unit

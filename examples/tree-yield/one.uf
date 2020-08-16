@@ -1,0 +1,237 @@
+toc2((,)):
+toc2(0) ->
+    [|a|],
+toc2(1) ->
+    [|b|],
+toc2(2) ->
+    [|c|],
+toc2(3) ->
+    [|d|],
+toc2(4) ->
+    [|e|],
+toc2(5) ->
+    [|f|],
+toc2(6) ->
+    [|g|]
+
+toc((,)):
+toc(x) ->
+   toc2(mod(x,7))
+
+mod((,), (,)):
+mod(a, m) ->
+   if(leq(m,a),{() -> mod(minus(a,m),m)},{() -> a})
+
+leq((,), (,)):
+leq(x, y) ->
+   if(eqN(x,y),{() -> true()},{() -> lt(x,y)})
+
+leastGT((,), (,), (,)):
+leastGT(orig, best, ['nil]) ->
+       best,
+leastGT(orig, best, ['cons,x,xs]) ->
+       if(and(lt(orig,x),lt(x,best)),{() -> leastGT(orig,x,xs)},{() -> leastGT(orig,best,xs)})
+
+lowest((,), (,)):
+lowest(x, ['nil]) ->
+      x,
+lowest(x, ['cons,y,ys]) ->
+      if(lt(y,x),{() -> lowest(y,ys)},{() -> lowest(x,ys)})
+
+fold((,), (,), (,)):
+fold(f, e, ['nil]) ->
+    e,
+fold(f, e, ['cons,x,xs]) ->
+    f(x,fold(f,e,xs))
+
+mul((,), (,)):
+mul(x, 0) ->
+   0,
+mul(x, y) ->
+   plus(x,mul(x,minus(y,1)))
+
+reverse((,)):
+reverse(xs) ->
+       reverse'(xs,nil())
+
+reverse'((,), (,)):
+reverse'(['nil], ys) ->
+        ys,
+reverse'(['cons,x,xs], ys) ->
+        reverse'(xs,cons(x,ys))
+
+snoc((,), (,)):
+snoc(['nil], x) ->
+    cons(x,nil()),
+snoc(['cons,y,ys], x) ->
+    cons(y,snoc(ys,x))
+
+concat((,), (,)):
+concat(['nil], ys) ->
+      ys,
+concat(['cons,x,xs], ys) ->
+      cons(x,concat(xs,ys))
+
+len((,)):
+len(['nil]) ->
+   0,
+len(['cons,_,xs]) ->
+   plus(1,len(xs))
+
+nth((,), (,)):
+nth(0, ['cons,s,_]) ->
+   s,
+nth(k, ['cons,_,xs]) ->
+   nth(minus(k,1),xs)
+
+range((,), (,)):
+range(from, to) ->
+     if(eqN(from,to),{() -> nil()},{() -> cons(from,range(plus(from,1),to))})
+
+drop((,), (,)):
+drop(0, xs) ->
+    xs,
+drop(k, ['nil]) ->
+    nil(),
+drop(k, ['cons,x,xs]) ->
+    drop(minus(k,1),xs)
+
+take((,), (,)):
+take(0, _) ->
+    nil(),
+take(k, ['cons,x,xs]) ->
+    cons(x,take(minus(k,1),xs))
+
+not((,)):
+not(['true]) ->
+   false(),
+not(['false]) ->
+   true()
+
+and((,), (,)):
+and(['true], y) ->
+   y,
+and(['false], _) ->
+   false()
+
+while((,), (,)):
+while(cond, body) ->
+     if(cond(),{() -> body();while(cond,body)},{() -> unit()})
+
+if((,), (,), (,)):
+if(['true], t, f) ->
+  t(),
+if(['false], t, f) ->
+  f()
+
+print((,)):
+print(s) ->
+     map('ouch,s);unit()
+
+map((,), (,)):
+map(f, ['nil]) ->
+   nil(),
+map(f, ['cons,x,xs]) ->
+   cons(f(x),map(f,xs))
+
+fromMaybe((,)):
+fromMaybe(['just,x]) ->
+         x
+
+thdT((,)):
+thdT(['trio,_,_,z]) ->
+    z
+
+sndT((,)):
+sndT(['trio,_,y,_]) ->
+    y
+
+fstT((,)):
+fstT(['trio,x,_,_]) ->
+    x
+
+snd((,)):
+snd(['pair,_,y]) ->
+   y
+
+fst((,)):
+fst(['pair,x,_]) ->
+   x
+
+main():
+main() ->
+    tower()
+
+tower():
+tower() ->
+     schedj2(thread(cons([|A|],cons([| |],nil()))),schedj2(thread(cons([|B|],cons([| |],nil()))),thread(cons([|C|],cons([| |],nil())))))
+
+schedj2((([yield] , ([],0) ) , yield), (([yield] , ([],0) ) , yield)):
+schedj2(['unit], ['unit]) ->
+       unit()
+
+schedj((([yield] , ([],0) ) , yield), (([yield] , ([],0) ) , yield), (([yield] , ([],0) ) , yield)):
+schedj(['unit], ['unit], ['unit]) ->
+      unit()
+
+whatever((,), (,)):
+whatever(x, y) ->
+        x;y
+
+pass((,)):
+pass(x) ->
+    x
+
+thread((,)):
+thread(st) ->
+      print(st);sleepMany(200000);thread(st)
+
+sleepMany((,)):
+sleepMany(x) ->
+         if(gt(x,0),{() -> 'sleep(sleepGranularity());sleepMany(minus(x,sleepGranularity()))},{() -> unit()})
+
+sleepGranularity():
+sleepGranularity() ->
+                1000
+
+isAlphaNum((,)):
+
+case((,), (,)):
+case(x, f) ->
+    f(x)
+
+just():
+just(x1) ->
+    ['just,x1]
+
+nothing():
+nothing() ->
+       ['nothing]
+
+trio():
+trio(x1, x2, x3) ->
+    ['trio,x1,x2,x3]
+
+pair():
+pair(x1, x2) ->
+    ['pair,x1,x2]
+
+false():
+false() ->
+     ['false]
+
+true():
+true() ->
+    ['true]
+
+unit():
+unit() ->
+    ['unit]
+
+nil():
+nil() ->
+   ['nil]
+
+cons():
+cons(x1, x2) ->
+    ['cons,x1,x2]
