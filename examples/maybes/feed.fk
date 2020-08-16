@@ -42,81 +42,97 @@ nextId cur xs =
 -- Promise structures.
 
 interface Promise S [E] =
-          promise R : Prom S R [E | Promise S [E|], RefState, Yield]
-                   -> Pid S R [E | Promise S [E|], RefState, Yield]
+          promise R : IH S R [E | Promise S [E|], RefState, Yield]
+                   -> Prom R [E | Promise S [E|], RefState, Yield]
         | signal : S -> Unit
-        | await R : Pid S R [E | Promise S [E|], RefState, Yield] -> R
+        | await R : Prom R [E | Promise S [E|], RefState, Yield] -> R
 
 -- Any effects will be performed in the returned comp.
 -- Any guard conditions should NOT have effects in.
--- data Prom R [E] = prom {Sig -> Maybe {[E|]R}}
+-- data ih R [E] = ih {Sig -> Maybe {[E|]R}}
 
-data Prom S R [E] = prom {S -> Maybe {[E|] R}}
+data IH S R [E] = ih {S -> Maybe {[E|] R}}
 
-data Print = printSig String | peep
+data Feed = nextItem | newData Int | response (List Int) | display Int
 
 ----------------------------
 -- Pids
 
-data Pid S X = pid (Ref (PromiseStatus X))
+data Prom X = prom (Ref (PromiseStatus X))
 
 data PromiseStatus X = empty | done X | addRes {X -> Unit}
 
-readPid : {Pid S X [E|] -> [RefState] PromiseStatus X [E|]}
-readPid (pid cell) = read cell
+readPid : {Prom X [E|] -> [RefState] PromiseStatus X [E|]}
+readPid (prom cell) = read cell
 
-writePid : {Pid S X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
-writePid (pid cell) x = write cell x
+writePid : {Prom X [E|] -> PromiseStatus X [E|] -> [RefState] Unit}
+writePid (prom cell) x = write cell x
 
 ----------------------------
 -- Threads
 
-printer : {[Promise Print [Console], Yield, Console] Unit}
-printer! = print "Printer starting\n";
-           promise (prom { (printSig x) -> just {print "\n*- First "; print x ; print "\n"}
-                         | _ -> nothing});
-           promise (prom { (printSig x) -> just {print "\n*- Secnd "; print x ; print "\n"}
-                         | _ -> nothing});
-           promise (prom { peep -> just {print "\npeep!\n"}
-                         | _ -> nothing});
-           yield!;
-           promise (prom { (printSig x) -> just {print "\n*- Third "; print x ; print "\n"}
-                         | _ -> nothing});
-           
-           unit
+head : List Int -> Int
+head [] = -1
+head (x :: xs) = x
 
+pop : List Int -> List Int
+pop [] = []
+pop (x::xs) = xs
 
-sender : {[Promise Print [Console], Yield, Console]Unit}
-sender! = print "Sender starting\n";
-          -- signal otherSig;
-          signal (printSig "One");
-          signal (printSig "Two");
-          yield!;
-          signal (printSig "Three");
-          signal peep;
-          unit
+last : List Int -> Int
+last [] = -1
+last (x::[]) = x
+last (x :: (y :: ys)) = last (y :: ys)
 
--- catter : {[Console, Yield] Unit}
--- catter! = print "Beppy\n";
---           sleep 200000;
---           yield!;
---           catter!
-         
+interface InThread = [Promise Feed [Console], Console, RefState, Yield]
 
--- -- Utility for controller; breaks down a big sleeping chunk and yields inbetween.
--- sleepAndYield : Int -> [Console, Yield]Unit
--- sleepAndYield x = if (x < 0)
---               { unit }
---               { sleep 100000; yield!; sleepAndYield (x - 100000) }
+displayRestart : {List Int -> Maybe (Prom (List Int) [InThread]) -> [InThread] Unit}
+displayRestart cache p =
+    signal (display (head cache));
+    let cache = pop cache in
+    promise { nextItem -> just { onNextList cache p } | _ -> nothing }; unit
+
+onNextList : {List Int -> Maybe (Prom (List Int) [InThread]) -> [InThread] Unit}
+onNextList cache (just p) =
+    if (len cache == 0)
+         { let newCache = await p in
+           displayRestart newCache nothing }
+         { displayRestart cache (just p) }
+onNextList xs nothing =
+    if (len xs == 3)
+       { let resp = promise (ih {(response x) -> just {x} | _ -> nothing}) in
+         signal (newData (last xs));
+         displayRestart xs (just resp) }
+       { displayRestart xs nothing }
+
+client : {List Int -> Maybe (Prom (List Int) [InThread]) -> [InThread] Unit}
+client cache p =
+    promise (ih { nextItem -> just { onNextList cache p } | _ -> nothing }); unit
+
+serverBody : {Int -> [InThread] Unit}
+serverBody x = signal (response (range (x + 1) (x + 10)))
+
+server : {[InThread] Unit}
+server! =
+    promise (ih { (newData x) -> just { serverBody x; server!} | _ -> nothing }); unit
+
+inNext : {Int -> [Console] Unit}
+inNext res = ouint res; print " "
+
+nexter : {[InThread] Unit}
+nexter! = inch!; print "*\n"; signal nextItem;
+          await (promise (ih { (display res) -> just {inNext res} | _ -> nothing }));
+          nexter!
+          -- nexter!
 
 
 ----------------------------
 -- Callback utilities
 
-to_writeM2 : Pid S R [E|RefState]
+to_writeM2 : Prom R [E|RefState]
           -> {S -> (Maybe {[E|RefState] R})}
           -> {S -> (Maybe {[E|RefState] Unit})}
-to_writeM2 (pid cell) cb =
+to_writeM2 (prom cell) cb =
     {x -> case (cb x)
          { nothing -> nothing
          | (just susp) ->
@@ -140,9 +156,9 @@ hdl : {Int -> Ref (Threads S [Console, Yield, RefState])
     -> <Promise S [Console]> Unit
     -> [Yield, Console, RefState] Unit}
 
-hdl thId thrs <promise (prom cb) -> k> =
-    -- Create new pid cell
-    let cell = pid (new empty) in
+hdl thId thrs <promise (ih cb) -> k> =
+    -- Create new Prom cell
+    let cell = prom (new empty) in
     -- Process callback to convert to general form
     let cbMod = <Console, RefState, Yield>(to_writeM2 cell cb) in
 
@@ -174,25 +190,30 @@ hdl thId thrs <await cell -> thr> =
          -- thr2 has Fork in ambient, but addRes won't allow that.
          | empty ->
                  writePid cell (addRes thr);
-                 hdl thId thrs unit}
+                 hdl thId thrs unit
+         | (addRes _) -> print ("Shouldn't happen"); unit}  -- shouldn't happen
 
 hdl thId thrs unit = unit
 
 -- -------------------------------------
 -- -- Running
 
-thr1 : {Ref (Threads Print [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
-thr1 thrs = {hdl 0 thrs (<RefState> printer!) }
+thr1 : {Ref (Threads Feed [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr1 thrs = {hdl 0 thrs (client ([1, 2, 3, 4, 5]) nothing) }
 
-thr2 : {Ref (Threads Print [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
-thr2 thrs = {hdl 1 thrs (<RefState> sender!) }
+thr2 : {Ref (Threads Feed [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr2 thrs = {hdl 1 thrs (server!) }
+
+thr3 : {Ref (Threads Feed [Console, Yield, RefState]) -> {[Console, Yield, RefState] Unit}}
+thr3 thrs = {hdl 2 thrs (nexter!) }
 
 -- All of these RefState adaptors are necessary, unfortunately.
-makeThreads : {[RefState] Ref (Threads Print [Console, Yield, RefState])}
+makeThreads : {[RefState] Ref (Threads Feed [Console, Yield, RefState])}
 makeThreads! =
     let thrs = new tnil in
     write thrs (tentry 0 (<RefState> (thr1 thrs)) (tq [])
-               (tentry 1 (<RefState> (thr2 thrs)) (tq []) tnil));
+               (tentry 1 (<RefState> (thr2 thrs)) (tq [])
+               (tentry 2 (<RefState> (thr3 thrs)) (tq []) tnil)));
     thrs
 
 
@@ -212,4 +233,4 @@ hdled! =
 
 
 main : {[Console, RefState] Unit}
-main! = hdled!
+main! = print "Running!\n\n"; hdled!
