@@ -84,38 +84,61 @@ type Agenda = [Frame]
 type SkippedAgenda = [Frame]
 -- [Frame]: Skipped frames (most recently skipped frame is on top)
 
+type Stack x = [x]
+
 -- First arg is the counter
 -- Second is the threshold
-type CState = (Counter, Int)
+type CState = (Stack Counter, Int)
 
 data Counter = JC Int | YieldPlease
+  deriving (Show, Eq)
 
 -- Counts the number of function calls, so we can insert yields.
 type Count s = State CState s
 
-addToCounter :: Counter -> Int -> Int -> Counter
-addToCounter (JC x) incr thresh =
+push :: a -> Stack a -> Stack a
+push x xs = x : xs
+
+addToCounter :: Int -> Int -> Counter -> Counter
+addToCounter incr thresh (JC x) =
   let sum = x + incr in
   if (sum >= thresh) then YieldPlease else (JC sum)
-addToCounter YieldPlease _ _ = YieldPlease
+addToCounter _ _ YieldPlease = YieldPlease
+
+newCounter :: Count ()
+newCounter = do (c, t) <- get
+                put (push (JC 0) c, t)
 
 incrCount :: Count ()
 incrCount = do (c, t) <- get
-               put (addToCounter c 1 t, t)
+               -- put (addToCounter c 1 t, t)
+               put (map (addToCounter 1 t) c, t)
 
-getCount :: Count Counter
-getCount = fst <$> get
+topYields :: Count Bool
+topYields = do (cs, t) <- get
+               case cs of [] -> return False
+                          (x : _) -> return (isCounterYield x)
+
+-- TODO Rewrite in terms of push / pop
+resetTop :: Count ()
+resetTop = do (cs, t) <- get
+              case cs of [] -> put ([], t)
+                         (_ : xs) -> put ((JC 0) : xs, t)
+
+getCounters :: Count (Stack Counter)
+getCounters = fst <$> get
+
 
 isCounterYield :: Counter -> Bool
 isCounterYield YieldPlease = True
 isCounterYield _ = False
 
-resetCount :: Count ()
-resetCount = do (c, t) <- get
-                put (JC 0, t)
+-- resetCount :: Count ()
+-- resetCount = do (c, t) <- get
+--                 put (JC 0, t)
 
-counterOverThresh :: Count Bool
-counterOverThresh = (isCounterYield . fst) <$> get
+-- counterOverThresh :: Count Bool
+-- counterOverThresh = (isCounterYield . fst) <$> get
 
 envToList :: Env -> [[Def Val]]
 envToList g = envToList' g []
@@ -159,18 +182,46 @@ compute g (ED f)       ls   = consume (VD f) ls                             -- 1
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
 -- 2) Application. Compute function. Save args for later.
+compute g (SApp f@(EF adaps _) as amb)    ls
+  | hasYield adaps = trace ("\nHAS YIELD!" ++ show adaps ++ "\n") $
+                     do incrCount;
+                        xxx <- getCounters
+                        trace (show xxx ++ "\n") $
+                          compute g f (Fun g as : ls)
+  | otherwise = trace (show adaps) $
+                do incrCount;
+                   r <- topYields
+                   if (r)
+                     then do resetTop;
+                             trace "Yielding!" $
+                               compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+                     else do xxx <- getCounters
+                             -- trace (show xxx ++ "\n") $
+                             compute g f (Fun g as : ls)
+
+-- Other cases, where f isnt a handler (?)
 compute g (SApp f as amb)    ls   =
   -- trace (show f) $
-  do cOverT <- counterOverThresh
-     -- So now we only insert a yield if counter is over 200 and the term is
-     -- allowed to yield. `amb` is the ambient ability at that application.
-     if (cOverT && ("Yield" `elem` amb))
-       then do resetCount;
+  do
+     r <- topYields
+     if (r && ("Yield" `elem` amb))
+       then do resetTop;
                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
        else do incrCount;
                compute g f (Fun g as : ls)
 
--- original
+-- 2) Application. Compute function. Save args for later.
+-- compute g (SApp f as amb)    ls   =
+--   -- trace (show f) $
+--   do cOverT <- counterOverThresh
+--      -- So now we only insert a yield if counter is over 200 and the term is
+--      -- allowed to yield. `amb` is the ambient ability at that application.
+--      if (cOverT && ("Yield" `elem` amb))
+--        then do resetCount;
+--                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+--        else do incrCount;
+--                compute g f (Fun g as : ls)
+
 compute g (e :! f)     ls   = compute g e (Seq g f : ls)
 
 compute g (e :// f)    ls   = compute g e (Qes g f : ls)                    -- 2) Composition. Compute 1st exp.  save 2nd for later.
@@ -270,7 +321,8 @@ args f cs g [] es ls = args f cs g [([], [])] es ls                         -- d
 args f [] g h@(hs : hss) (e : es) ls =
   if (hasYield h)
     then trace ("ADD COUNTER HERE? " ++ show h) $
-         compute g e (Arg hs f [] g hss es : ls)
+         do newCounter;
+            compute g e (Arg hs f [] g hss es : ls)
     else
          compute g e (Arg hs f [] g hss es : ls)
 
@@ -473,7 +525,7 @@ prog g ds = g' where
   g' = g :/ map ev ds
   ev (DF f hss pes) = DF f hss pes
   ev (x := e) = x := v where
-    Ret v = evalState (compute g' e []) (JC 0, yield_thresh)
+    Ret v = evalState (compute g' e []) ([], yield_thresh)
 
 load :: [Def Exp] -> Env
 load = prog envBuiltins
@@ -488,7 +540,7 @@ loadFile x = do
 
 -- Given env `g` and id `s`,
 try :: Int -> Env -> String -> (Comp, CState)
-try t g s = runState (compute g e []) (JC 0, t) where
+try t g s = runState (compute g e []) ([], t) where
   Just (e, "") = parse pExp s
 
 ------------------------
