@@ -1,9 +1,9 @@
---! YT=10
+--! YT=1000
 
 include std
 
 sleepGranularity : {Int}
-sleepGranularity! = 100000
+sleepGranularity! = 1000
 
 sleepMany : {Int -> [Console, Yield] Unit}
 sleepMany x = if (x > 0) {sleep (sleepGranularity!);
@@ -40,8 +40,12 @@ schedj2Out <yield -> inA> <inB> = schedj2Out (inA unit) inB!
 schedj2Out <inA> <yield -> inB> = schedj2Out inA! (inB unit)
 schedj2Out unit unit = unit
 
+-- wrap : {<Yield> Unit -> Unit}
+-- wrap <yield -> k> = wrap (k unit)
+
 tower : {[Console] Unit}
-tower! = schedj2Out (schedj2In (thread "A ") (thread "B ")) (thread "C ")
+-- tower! = schedj2Out (schedj2In (thread "A ") (thread "B ")) (schedj2In (thread "C ") (thread "D "))
+tower! = schedj2 (schedj2 (schedj2 (thread "A ") (thread "B ")) (schedj2 (thread "C ") (thread "D "))) (schedj2 (thread "E ") (thread "F "))
 -- tower! = schedj2 (schedj2 (thread "A ") (thread "B ")) (thread "C ")
 
 main : {[Console] Unit}

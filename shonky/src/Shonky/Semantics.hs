@@ -115,7 +115,8 @@ addToCounter _ _ YieldPlease = YieldPlease
 
 newCounter :: Count ()
 newCounter = do (c, t) <- get
-                trace "Adding counter!" $ put (push (JC 0) c, t)
+                -- trace "Adding counter!" $
+                put (push (JC 0) c, t)
 
 incrCount :: Count ()
 incrCount = do (c, t) <- get
@@ -198,52 +199,10 @@ compute g (ED f)       ls   = consume (VD f) ls                             -- 1
 compute g (a :& d)     ls   = compute g a (Car g d : ls)-- 2) compute head. save tail for later.
 
 -- 2) Application. Compute function. Save args for later.
--- compute g (SApp f@(EF adaps _) as amb)    ls
---   | hasYield adaps = trace ("\nHAS YIELD!\n" ++ show adaps ++ "\n") $
---                      -- trace (show f) $
---                      do --incrCount;
---                         xxx <- getCounters
---                         -- trace ("Pre pop: " ++ show xxx ++ "\n") $
---                         popTop;
---                         r <- topYields
---                         if (r)
---                          then -- trace ("Post pop: " ++ show xxx ++ "\n") $
---                               do resetTop;
---                                  trace "Yielding on hdlr!" $
---                                    compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
---                          else --trace ("Post pop: " ++ show xxx ++ "\n") $
---                               do trace ("Not yielding on hdlr\n" ++ show as ++ "\n") $
---                                    compute g f (Fun g as : ls)
---   | otherwise = trace (show adaps) $
---                 do incrCount;
---                    r <- topYields
---                    if (r)
---                      then do resetTop;
---                              trace "Yielding!" $
---                                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
---                      else do xxx <- getCounters
---                              trace (show xxx ++ "\n") $
---                                compute g f (Fun g as : ls)
-
--- Other cases, where f isnt a handler (?)
--- compute g (SApp f@(EV x) as amb)    ls   =
---   -- trace (show f) $
---   do xxx <- getCounters
---      r <- topYields
---      if (r && ("Yield" `elem` amb))
---        then trace ("Yielding not EF!" ++ show xxx ++ "\n") $
---             do
---                resetTop;
---                xxx <- getCounters
---                -- trace ("Post reset: " ++ show xxx) $
---                compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
---        else do incrCount;
---                compute g f (Fun g as : ls)
-              
 -- Other cases, where f isnt a handler (?)
 compute g (SApp f as amb)    ls   =
   -- trace (show f) $
-  do xxx <- getCounters
+  do
      r <- topYields
      if (r && ("Yield" `elem` amb))
        then -- trace ("Yielding not EF!" ++ "\n") $
@@ -283,7 +242,7 @@ consume v (Cdr u      : ls) = consume (simplStr u v) (ls)
 -- Given: eval. function `v`, non-eval. args `as`. Compute `as`, then feed them into `v`
 consume v (Fun g as   : ls) = args v [] g (adapsAndHandles v) as (ls)
 
- -- Given: Eval.:     handler `f`,
+-- Given: Eval.:     handler `f`,
                              --                   first args `cs` (reversed),
                              --                   current arg `v`
                              --        Non-eval.: last args `es`
@@ -359,6 +318,20 @@ isScheduler :: Val -> Bool
 isScheduler (VF _ ads _) = hasYield ads
 isScheduler _ = False
 
+compToExp :: Comp -> Exp
+compToExp (Call str _ _ _) = EA str
+compToExp (Ret _) = error "compToExp called on Ret"
+
+-- Given eval. operator f, and eval, reversed arguments `cs`,
+-- Resuspend them; that is, create a new
+resuspend :: Val -> [Comp] -> Exp
+resuspend (VF g adps pes) cs = SApp (EF adps pes) (map compToExp cs) ["Yield"]
+resuspend _ cs = error "Resuspend called with invalid Val"
+
+toVE :: Val -> Exp
+toVE (VF g adps pes) = EF adps pes
+toVE _ = error "TOVE called badly. "
+
 -- given: eval. operator `f`, eval. reversed arguments `cs`, env `g`,
 --        handleable commands, non-eval. args `es`, frame stack
 -- Compute until all [Exp] are [Comp], then call `apply`.
@@ -366,21 +339,25 @@ args :: Val -> [Comp] -> Env -> [([Adap], [String])] -> [Exp] -> Agenda -> Count
 args f cs g hss [] ls = -- apply f (reverse cs) ls                      -- apply when all args are evaluated
   -- trace ("Looking in args") $
    if (isScheduler f)
-    -- First we remove the old arguments, as we know it's done, nothing left to count.
-    then trace "\n\nHas yield in args" $
+    -- First we remove the old counter, as we know it's done, nothing left to count.
+    then -- trace "\n\nHas yield in args" $
           do popTop;
              -- Now we check if we're meant to yield
              r <- topYields
              -- Check the counters...
              xxx <- getCounters
-             trace (show xxx) $
-              if (r)
-               -- If we are, we stop what we're doing and put a yield in front.
-               then trace "Scheduler is Yielding" $
-                 compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], []) f cs g hss [] : ls)
-                 -- compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], [[]]) f (reverse cs) g [] [] : ls)
-               else do newCounter;
-                       apply f (reverse cs) ls
+             -- trace (show xxx) $
+             if (r)
+              -- If we are, we stop what we're doing and put a yield in front.
+              then -- trace ("Scheduler is Yielding " ++ show xxx) $
+                   let (gUpdated, exp) = applySuspend f (reverse cs) ls in
+                   compute gUpdated ((SApp (EA "yield") [] ["Yield"]) :! (SApp (thunk exp)) [] ["Yield"]) ls
+                -- compute g ((SApp (EA "yield") [] ["Yield"]) :! (toVE f)) (Arg ([], []) f cs g hss [] : ls)
+               -- compute g ((SApp (EA "yield") [] ["Yield"]) :! resuspend f cs) ls
+                -- compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], []) f cs g hss [] : ls)
+                -- compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], [[]]) f (reverse cs) g [] [] : ls)
+              else do --newCounter;
+                      apply f (reverse cs) ls
     else apply f (reverse cs) ls
 
 args f cs g [] es ls = args f cs g [([], [])] es ls                         -- default to [] (no handleable commands) if not explicit
@@ -389,9 +366,8 @@ args f [] g h@(hs : hss) (e : es) ls =
   if (hasYield h)
     then -- trace (printOpNice f) $
           do newCounter;
-             xxx <- getCounters
-             trace ("When adding: " ++ show xxx) $
-              compute g e (Arg hs f [] g hss es : ls)
+             -- trace ("When adding: " ++ show xxx) $
+             compute g e (Arg hs f [] g hss es : ls)
     else
          compute g e (Arg hs f [] g hss es : ls)
 args f cs g (hs : hss) (e : es) ls =
@@ -427,22 +403,52 @@ isAdapYield (strs, _) = any ((==) "yield") strs
                                                                             --   [String])]   handleable commands at further args
                                                                             --        [Exp]   non-eval. args
 
-tryIntercept :: Val -> [Comp] -> Agenda -> Count Comp
-tryIntercept f@(VF g adps pes) cs ls =
-  -- trace ("\n\n*-- All eval, has yield; " ++ (concatMap pComp cs) ++ "\n\n") $
-  -- We remove the top thing, as it's for arguments that are done anyway
-    do popTop;
-       r <- topYields
-       -- Now we check if we have to yield to above control.
-       -- If so, we insert HERE
-       if (r)
-         then trace "INSERT YIELD HERE" $
-                compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], [[]]) f (reverse cs) g [] [] : ls)
-                -- compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp (EF adps pes) (map ()) ["Yield"]))
---                                    compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
-                -- tryRules (EF adps pes) g pes cs ls
-         else tryRules (EF adps pes) g pes cs ls
+-- tryIntercept :: Val -> [Comp] -> Agenda -> Count Comp
+-- tryIntercept f@(VF g adps pes) cs ls =
+--   -- trace ("\n\n*-- All eval, has yield; " ++ (concatMap pComp cs) ++ "\n\n") $
+--   -- We remove the top thing, as it's for arguments that are done anyway
+--     do popTop;
+--        r <- topYields
+--        -- Now we check if we have to yield to above control.
+--        -- If so, we insert HERE
+--        if (r)
+--          then trace "INSERT YIELD HERE" $
+--                 compute g ((SApp (EA "yield") [] ["Yield"])) (Arg ([], [[]]) f (reverse cs) g [] [] : ls)
+--                 -- compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp (EF adps pes) (map ()) ["Yield"]))
+-- --                                    compute g ((SApp (EA "yield") [] ["Yield"]) :! (SApp f as amb)) ls
+--                 -- tryRules (EF adps pes) g pes cs ls
+--          else tryRules (EF adps pes) g pes cs ls
 
+
+-- tryRules f g [] cs ls = if (any isYield cs)
+--   -- Make arguments for the passed-in function, which is the one being
+--   -- performed, and reinvoke it. This expression doesn't need to be able to
+--   -- yield, so can just explicitly pass in False.
+--   then let (gUpdated, expargs) = makeArgs g cs in
+--        -- trace ("\n" ++ show f ++ "\n$$$\n" ++ show expargs) $
+--          compute gUpdated (SApp f expargs []) ls
+--   -- if not, abort as before.
+--   else error "Command"
+
+tryRulesTight :: Exp -> Env -> [([Pat], Exp)] -> [Comp] -> Agenda -> (Env, Exp)
+tryRulesTight f g [] cs ls = if (any isYield cs)
+  then let (gUpdated, expargs) = makeArgs g cs in (gUpdated, SApp f expargs [])
+
+  else error "command"
+  where
+    isYield (Call "yield" _ _ _) = True
+    isYield _ = False
+tryRulesTight f g ((ps, e) : pes) cs ls = case matches g ps cs of
+  Just g -> (g, e)
+  Nothing -> tryRulesTight f g pes cs ls
+
+thunk :: Exp -> Exp
+thunk e = EF [] [([], e)]
+
+applySuspend :: Val -> [Comp] -> Agenda -> (Env, Exp)
+applySuspend (VF g adps pes) cs ls =
+  tryRulesTight (EF adps pes) g pes cs ls
+applySuspend _ _ _ = error "applysuspenderror"
 
 -- `apply` is called by `args` when all arguments are evaluated
 -- given: eval. operator, eval. args, frame stack
@@ -505,6 +511,8 @@ command c vs ks n (k@(Arg (adps, hs) f cs g hss es) : ls) =                 -- i
 command c vs ks n (Adp (cs, r) : ls)
   | c `elem` cs = command c vs (Adp (cs, r) : ks) (renToFun r n) ls         -- if there is an adaptor frame: apply adaptor and recurse
 command c vs ks n (k : ls) = command c vs (k : ks) n ls                     -- skip current handler `k` and recurse
+
+
 
 
 -- given:  env, rules, evaluated args, frame stack
