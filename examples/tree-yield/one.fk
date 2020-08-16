@@ -1,9 +1,9 @@
---! YT=1000
+--! YT=10
 
 include std
 
 sleepGranularity : {Int}
-sleepGranularity! = 1000
+sleepGranularity! = 100000
 
 sleepMany : {Int -> [Console, Yield] Unit}
 sleepMany x = if (x > 0) {sleep (sleepGranularity!);
@@ -28,11 +28,20 @@ schedj unit unit unit = unit
 schedj2 : {<Yield> Unit -> <Yield> Unit -> Unit}
 schedj2 unit unit = unit
 
+schedj2In : {<Yield> Unit -> <Yield> Unit -> Unit}
+schedj2In <yield -> inA> <yield -> inB> = schedj2In (inA unit) (inB unit)
+schedj2In <yield -> inA> <inB> = schedj2In (inA unit) inB!
+schedj2In <inA> <yield -> inB> = schedj2In inA! (inB unit)
+schedj2In unit unit = unit
+
+schedj2Out : {<Yield> Unit -> <Yield> Unit -> Unit}
+schedj2Out <yield -> inA> <yield -> inB> = schedj2Out (inA unit) (inB unit)
+schedj2Out <yield -> inA> <inB> = schedj2Out (inA unit) inB!
+schedj2Out <inA> <yield -> inB> = schedj2Out inA! (inB unit)
+schedj2Out unit unit = unit
+
 tower : {[Console] Unit}
-tower! = schedj2 (thread "A ") (schedj2 (thread "B ") (thread "C "))
+tower! = schedj2Out (schedj2In (thread "A ") (thread "B ")) (thread "C ")
 
 main : {[Console] Unit}
 main! = tower!
--- main! = schedj (pass (thread "A ")) (pass (thread "B ")) unit
--- main! = schedj unit unit unit
--- main! = schedj2 (whatever (thread "A ") (thread "B ")) unit
