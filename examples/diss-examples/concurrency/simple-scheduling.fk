@@ -1,0 +1,33 @@
+include std
+
+interface Yield = yield : Unit
+
+th1 : {[Console, Yield] Unit}
+th1! = print "one "; yield!; print "two "; yield!; print "three "; yield!
+
+th2 : {[Console, Yield] Unit}
+th2! = print "1 "; yield!; print "2 "; yield!; print "3 "; yield!
+
+-- Runs all of the LHS first, then trades
+scheduleA : {<Yield> Unit -> <Yield> Unit -> Unit}
+scheduleA <yield -> m> <n> = scheduleA (m unit) n!
+scheduleA <m> <yield -> n> = scheduleA m! (n unit)
+scheduleA _ _ = unit
+
+-- By removing all of the yields at once, we get synchronisation!
+scheduleB : {<Yield> Unit -> <Yield> Unit -> Unit}
+scheduleB <yield -> m> <yield -> n> = scheduleB (m unit) (n unit)
+scheduleB <yield -> m> <n> = scheduleB (m unit) n!
+scheduleB <m> <yield -> n> = scheduleB m! (n unit)
+scheduleB _ _ = unit
+
+-- Runs all of the LHS first, then trades
+scheduleC : {<Yield> Unit -> <Yield> Unit -> Unit}
+scheduleC <yield -> m> <n> = scheduleC n! (m unit)
+scheduleC <m> <yield -> n> = scheduleC (n unit) m!
+scheduleC _ _ = unit
+
+main : {[Console]Unit}
+main! = scheduleA th1! th2!
+-- main! = scheduleB th1! th2!
+-- main! = scheduleC th1! th2!

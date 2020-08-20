@@ -1,0 +1,66 @@
+include std
+
+interface Co = yield : Unit
+             | fork : {[Co] Unit} -> Unit
+             | exit : Unit
+
+-- queue interface
+interface Queue S = enqueue : S -> Unit
+                  | dequeue : Maybe S
+
+-- process queue computations
+data Proc = proc {[Queue Proc]Unit}
+
+enqProc : {[Queue Proc]Unit} -> [Queue Proc]Unit
+enqProc p = enqueue (proc p)
+
+runNext : {[Queue Proc]Unit}
+runNext! = case dequeue! { (just (proc x)) -> x!
+                         | nothing         -> unit }
+
+
+scheduleBF : {<Co> Unit -> [Queue Proc] Unit}
+scheduleBF <fork p -> k> =
+    enqueue (proc {scheduleBF (<Queue> p!)});
+    scheduleBF (k unit)
+scheduleBF <yield -> k> =
+    enqueue (proc {scheduleBF ( (k unit))});
+    runNext!
+scheduleBF <exit -> _> =
+    runNext!
+scheduleBF unit =
+    runNext!
+
+scheduleDF : {<Co> Unit -> [Queue Proc] Unit}
+scheduleDF <fork p -> k> =
+    enqueue (proc {scheduleDF (k unit)});
+    scheduleDF (<Queue> p!)
+scheduleDF <yield -> k> =
+    enqueue (proc {scheduleDF (k unit)});
+    runNext!
+scheduleDF <exit -> _> = runNext!
+scheduleDF unit =
+    runNext!
+
+forker : {[Console, Co [Console]] Unit}
+forker! = print "Starting! ";
+          fork {print "one "; yield!; print "two "};
+          fork {print "1 "; yield!; print "2 "};
+          exit!
+
+-- FIFO queue implementation using a zipper
+fq : {List S -> List S -> <Queue S>X -> X}
+fq front        back <enqueue x -> k> = fq front (x :: back) (k unit)
+fq []           []   <dequeue -> k>   = fq [] [] (k nothing)
+fq []           back <dequeue -> k>   = fq (reverse back) [] (k dequeue!)
+fq (x :: front) back <dequeue -> k>   = fq front back (k (just x))
+fq front        back x                = x
+
+fifo : {<Queue S>X -> X}
+fifo <m> = fq [] [] m!
+
+runner : {[Console]Unit}
+runner! = fifo (scheduleDF (<Queue> forker!))
+
+main : {[Console] Unit}
+main! = runner!

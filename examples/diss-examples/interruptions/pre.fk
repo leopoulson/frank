@@ -1,0 +1,48 @@
+include std
+
+interface Stop = stop : Unit
+
+interface Go = go : Unit
+
+interface Yield = yield : Unit
+
+controller : {[Stop, Go, Console] Unit}
+controller! = stop!; print "stop ";
+              go!;
+              stop!; print "stop ";
+              go!;
+              stop!; print "stop "
+
+controller2 : {[Stop, Go, Console] Unit}
+controller2! = stop!; print "stop "; sleep 200000; go!; controller!
+
+printer : {[Console]Unit}
+printer! = print "1 "; print "2 "; print "3 "
+
+printerY : {[Console, Yield]Unit}
+printerY! = print "1 "; yield!; print "2 "; yield!; print "3 "; yield!
+
+suspend : {<Stop, Go> Unit -> Unit -> Maybe {[Console]Unit} -> [Console] Unit}
+-- Taking the stopped computation and storing it
+suspend <stop -> k> <cont> _ = suspend (k unit) unit (just cont)
+-- Running the stopped comp
+suspend <go -> k>   unit  (just c) = suspend (k unit) c! nothing
+suspend unit <c> _ = c!
+suspend <c> unit _ = suspend c! unit _
+
+
+suspend2 : {<Yield> Unit -> <Stop, Go> Unit -> Maybe {[Console, Yield] Unit} -> [Console] Unit}
+suspend2 <yield -> k> <stop -> l> _ = suspend2 unit (l unit) (just {k unit})
+suspend2 unit         <go -> l> (just res) = suspend2 (res!) (l unit) nothing
+suspend2 <yield -> k> <m> maybe = suspend2 (k unit) m! maybe
+suspend2 unit _ _ = unit
+suspend2 _ unit _ = unit
+
+suspend3 : {<Yield> Unit -> <Stop, Go> Unit -> Maybe {[Console, Yield] Unit} -> [Console] Unit}
+suspend3 <yield -> k> <stop -> l> _ = suspend3 unit (l unit) (just {k unit})
+suspend3 <_>          <go -> l> (just res) = suspend3 (res!) (l unit) nothing
+suspend3 unit <_> _ = unit
+
+main : {[Console] Unit}
+-- main! = suspend controller! printer! nothing
+main! = suspend3 printerY! controller2! nothing
